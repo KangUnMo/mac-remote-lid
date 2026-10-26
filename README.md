@@ -83,7 +83,10 @@ macOS IOPowerSources API로 내장 배터리 유무를 구분합니다. 배터�
 
 ## 다운로드 페이지
 
-`website/index.html`은 외부 폰트, CDN, 분석 코드 없이 열 수 있는 정적 페이지입니다. 빌드 후 다운로드 버튼은 실제 로컬 ZIP을 가리킵니다. 페이지의 토글은 화면 설명용이며 시스템 설정을 바꾸지 않습니다.
+- [공개 다운로드 페이지](https://KangUnMo.github.io/mac-remote-lid/)
+- [v1.1.0 미리보기 릴리스](https://github.com/KangUnMo/mac-remote-lid/releases/tag/v1.1.0)
+
+`website/index.html`은 외부 폰트, CDN, 분석 코드 없이 열 수 있는 정적 페이지입니다. 다운로드 버튼은 GitHub Releases의 앱 ZIP과 체크섬 파일을 가리킵니다. 로컬 빌드 결과는 기존 website/downloads 경로에 생성됩니다. 페이지의 토글은 화면 설명용이며 시스템 설정을 바꾸지 않습니다.
 
 로컬 서버가 필요하다면 사용 중이지 않은 포트에서 실행합니다.
 
@@ -97,9 +100,13 @@ python3 -m http.server 8766 --bind 127.0.0.1 --directory website
 
 공개 배포 전에는 [Apple의 Developer ID 안내](https://developer.apple.com/developer-id/)와 [공증 요구 사항](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)을 따라 Developer ID Application 서명, Hardened Runtime, secure timestamp와 공증을 준비해 주세요. 공증 완료 후 앱에 티켓을 첨부하고 ZIP과 SHA-256을 다시 생성해야 합니다.
 
-GitHub 등록 대상 이름은 `KangUnMo/mac-remote-lid`입니다. 공개 범위와 실제 등록은 별도 승인을 받습니다.
+소스는 [KangUnMo/mac-remote-lid](https://github.com/KangUnMo/mac-remote-lid) 공개 저장소에서 관리합니다.
 
-개인 GitHub에는 소스·문서·페이지 파일을 등록하고, 앱과 ZIP은 Releases에 별도로 올리는 구성을 권장합니다. 현재 `.gitignore`는 빌드 결과와 기존 루트 앱·ZIP을 제외합니다. 저장소 이름과 공개 범위, Git 변경 명령, Release 생성과 Pages 발행은 사용자 승인 후 확정합니다. 발행 전 다운로드 링크를 실제 Release 자산 URL로 바꾸고 접근 가능 여부를 확인해야 합니다. 현재 페이지는 로컬 검토용이므로 소스만 올려서는 ZIP 다운로드가 제공되지 않습니다.
+소스·문서·페이지 파일은 main 브랜치에 보관하고, 앱 ZIP과 SHA-256은 GitHub Releases에 별도로 공개합니다. `.gitignore`는 빌드 결과와 기존 루트 앱·ZIP을 제외합니다.
+
+`.github/workflows/pages.yml`은 main 브랜치의 website/ 또는 배포 설정이 변경되면 해당 정적 페이지를 GitHub Pages에 게시합니다. GitHub의 Pages 설정은 GitHub Actions 방식으로 활성화합니다. [배포 실행 내역](https://github.com/KangUnMo/mac-remote-lid/actions/workflows/pages.yml)에서 결과를 확인할 수 있습니다.
+
+현재 v1.1.0은 미리보기 릴리스입니다. 다음 버전을 배포할 때는 새 앱 ZIP·체크섬을 Releases에 공개한 다음 페이지의 다운로드 URL과 버전을 갱신합니다. 앱 ZIP은 소스 커밋이나 Pages 아티팩트에 포함하지 않습니다.
 
 ## 소스 구성
 
