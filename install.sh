@@ -4,7 +4,7 @@ set -euo pipefail
 # 원격지킴이 원클릭 설치 스크립트
 # 사용법: curl -fsSL https://raw.githubusercontent.com/KangUnMo/mac-remote-lid/main/install.sh | bash
 
-VERSION="1.1.1"
+VERSION="1.1.2"
 REPO="KangUnMo/mac-remote-lid"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/remote-lid-${VERSION}-arm64.zip"
 APP_NAME="원격지킴이.app"
