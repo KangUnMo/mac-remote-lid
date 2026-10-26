@@ -44,6 +44,41 @@ func getLocalIPAddresses() -> [IPInfo] {
     return addresses
 }
 
+struct GitHubRelease: Decodable {
+    let tag_name: String
+    let draft: Bool
+    let prerelease: Bool
+    let assets: [GitHubAsset]
+}
+
+struct GitHubAsset: Decodable {
+    let name: String
+    let browser_download_url: String
+}
+
+struct AppUpdateInfo {
+    let version: String
+    let downloadURL: URL
+}
+
+func parseVersionNumbers(_ string: String) -> [Int] {
+    let cleaned = string.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+    return cleaned.split(separator: ".").compactMap { Int($0) }
+}
+
+func isVersion(_ candidate: String, newerThan current: String) -> Bool {
+    let c = parseVersionNumbers(candidate)
+    let cur = parseVersionNumbers(current)
+    let count = max(c.count, cur.count)
+    for i in 0..<count {
+        let cv = i < c.count ? c[i] : 0
+        let curv = i < cur.count ? cur[i] : 0
+        if cv > curv { return true }
+        if cv < curv { return false }
+    }
+    return false
+}
+
 struct AppError: LocalizedError {
     let message: String
     var cancelled = false
@@ -334,8 +369,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let restoreButton = NSButton(title: "이전 설정 복원…", target: nil, action: nil)
     let launchCheckbox = NSButton(checkboxWithTitle: "로그인 시 자동 실행", target: nil, action: nil)
     let ipLabel = NSTextField(wrappingLabelWithString: "")
+    let updateBannerButton = NSButton(title: "새 버전 업데이트 가능", target: nil, action: nil)
     var timer: Timer?
     var powerRunLoopSource: CFRunLoopSource?
+    var availableUpdate: AppUpdateInfo?
+    var checkingUpdate = false
+    var updating = false
     var busy = false
     var refreshing = false
     var warningVisible = false
@@ -351,7 +390,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var stateURL: URL { folder.appendingPathComponent("restore.json") }
     var sleepDisabled: Int? { live?.settings.sleepDisabled }
     var fullyEnabled: Bool { live?.fullyEnabled == true }
-    var working: Bool { busy || refreshing || warningVisible }
+    var working: Bool { busy || refreshing || warningVisible || updating }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -380,6 +419,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refresh() }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke),
             name: NSWorkspace.didWakeNotification, object: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.checkForUpdates(manual: false)
+        }
     }
 
     func makeWindow() {
@@ -408,10 +450,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ipLabel.textColor = .secondaryLabelColor
         ipLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         ipLabel.maximumNumberOfLines = 3
+        updateBannerButton.target = self
+        updateBannerButton.action = #selector(updateAction)
+        updateBannerButton.bezelStyle = .rounded
+        updateBannerButton.contentTintColor = .systemTeal
+        updateBannerButton.font = .systemFont(ofSize: 13, weight: .semibold)
+        updateBannerButton.isHidden = true
         let note = NSTextField(wrappingLabelWithString: "전원을 안정적으로 연결하고 통풍되는 곳에 두세요.\n끄면 앱이 변경한 전원 설정을 이전 값으로 복원합니다.\n창을 닫아도 메뉴 막대에서 계속 실행됩니다.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 12)
-        let stack = NSStackView(views: [title, stateLabel, detailLabel, toggleRow, launchCheckbox, ipLabel, note])
+        let stack = NSStackView(views: [title, stateLabel, detailLabel, toggleRow, launchCheckbox, ipLabel, updateBannerButton, note])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 22
@@ -424,6 +472,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: panel.contentView!.bottomAnchor, constant: -24),
             detailLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             ipLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            updateBannerButton.widthAnchor.constraint(equalTo: stack.widthAnchor),
             note.widthAnchor.constraint(equalTo: stack.widthAnchor)
         ])
         window = panel
@@ -572,7 +621,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ipLabel.isHidden = false
         }
 
+        if let update = availableUpdate {
+            updateBannerButton.title = "⚡️ 새 버전(\(update.version))으로 지금 업데이트"
+            updateBannerButton.isHidden = false
+        } else {
+            updateBannerButton.isHidden = true
+        }
+
         menu.removeAllItems()
+        if let update = availableUpdate {
+            let updateItem = menu.addItem(withTitle: "⚡️ 새 버전(\(update.version))으로 업데이트…", action: #selector(updateAction), keyEquivalent: "")
+            updateItem.target = self
+            menu.addItem(.separator())
+        }
         item("원격지킴이 · \(label)")
         item(power)
         if let lid = live?.lid { item(lid) }
@@ -604,10 +665,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginItem.state = isLaunchAtLoginEnabled ? .on : .off
         loginItem.isEnabled = !working
 
+        item("업데이트 확인…", action: #selector(checkUpdateAction)).isEnabled = !working && !checkingUpdate
         item("제어 창 열기", action: #selector(showWindow))
         item("SSH 접속 허용 설정…", action: #selector(openSSHSettings))
         item("사용 안내", action: #selector(help))
-        item("종료…", action: #selector(quit)).isEnabled = !busy && !warningVisible
+        item("종료…", action: #selector(quit)).isEnabled = !busy && !warningVisible && !updating
     }
 
     func setupPowerMonitoring() {
@@ -645,6 +707,157 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let ip = sender.representedObject as? String else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(ip, forType: .string)
+    }
+
+    @objc func checkUpdateAction() {
+        checkForUpdates(manual: true)
+    }
+
+    @objc func updateAction() {
+        guard let update = availableUpdate else { return }
+        promptUpdate(update)
+    }
+
+    func checkForUpdates(manual: Bool = false) {
+        guard !checkingUpdate else { return }
+        checkingUpdate = true
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.1"
+
+        guard let url = URL(string: "https://api.github.com/repos/KangUnMo/mac-remote-lid/releases") else {
+            checkingUpdate = false
+            return
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.setValue("RemoteLid-App", forHTTPHeaderField: "User-Agent")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.checkingUpdate = false
+
+                guard let data = data,
+                      let releases = try? JSONDecoder().decode([GitHubRelease].self, from: data),
+                      let latest = releases.first(where: { !$0.draft }),
+                      let asset = latest.assets.first(where: { $0.name.contains("arm64") && $0.name.hasSuffix(".zip") }),
+                      let downloadURL = URL(string: asset.browser_download_url)
+                else {
+                    if manual {
+                        self.showInfo("업데이트 확인 실패", "최신 버전 정보를 가져오지 못했습니다. 네트워크 상태를 확인해 주세요.")
+                    }
+                    return
+                }
+
+                let latestVersion = latest.tag_name
+                if isVersion(latestVersion, newerThan: currentVersion) {
+                    let info = AppUpdateInfo(version: latestVersion, downloadURL: downloadURL)
+                    self.availableUpdate = info
+                    self.render()
+                    if manual {
+                        self.promptUpdate(info)
+                    }
+                } else {
+                    self.availableUpdate = nil
+                    self.render()
+                    if manual {
+                        self.showInfo("최신 버전 사용 중", "현재 최신 버전(\(currentVersion))을 사용하고 있습니다.")
+                    }
+                }
+            }
+        }.resume()
+    }
+
+    func promptUpdate(_ update: AppUpdateInfo) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "새 버전(\(update.version)) 업데이트"
+        alert.informativeText = "새로운 버전이 준비되었습니다. 지금 다운로드하여 업데이트할까요?\n\n업데이트가 완료되면 앱이 자동으로 재시작됩니다."
+        alert.addButton(withTitle: "지금 업데이트")
+        alert.addButton(withTitle: "나중에")
+        menu.cancelTracking()
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            applyUpdate(update)
+        }
+    }
+
+    func showInfo(_ title: String, _ message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "확인")
+        menu.cancelTracking()
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    func applyUpdate(_ update: AppUpdateInfo) {
+        guard !updating else { return }
+        updating = true
+        render()
+
+        if sleepDisabled == 1 {
+            turnOff { [weak self] success in
+                guard let self = self else { return }
+                if !success {
+                    self.updating = false
+                    self.render()
+                    self.showError("원격 모드 설정을 복원하지 못해 업데이트를 중단했습니다.")
+                    return
+                }
+                self.downloadAndInstallUpdate(update)
+            }
+        } else {
+            downloadAndInstallUpdate(update)
+        }
+    }
+
+    func downloadAndInstallUpdate(_ update: AppUpdateInfo) {
+        worker.async { [weak self] in
+            guard let self = self else { return }
+            do {
+                let currentBundle = Bundle.main.bundleURL.path
+                let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("RemoteLidUpdate-\(UUID().uuidString)")
+                try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+
+                let zipPath = tmpDir.appendingPathComponent("update.zip").path
+                _ = try run("/usr/bin/curl", ["-fL", update.downloadURL.absoluteString, "-o", zipPath], timeout: 60)
+                _ = try run("/usr/bin/ditto", ["-xk", zipPath, tmpDir.path], timeout: 30)
+
+                let sourceApp = tmpDir.appendingPathComponent("원격지킴이.app").path
+                guard FileManager.default.fileExists(atPath: sourceApp) else {
+                    throw AppError(message: "업데이트 파일에서 새 앱을 찾지 못했습니다.")
+                }
+
+                let helperScript = """
+                sleep 0.8
+                rm -rf "\(currentBundle)"
+                cp -R "\(sourceApp)" "\(currentBundle)"
+                xattr -cr "\(currentBundle)"
+                open "\(currentBundle)"
+                rm -rf "\(tmpDir.path)"
+                """
+                let helperPath = tmpDir.appendingPathComponent("install_helper.sh").path
+                try helperScript.write(toFile: helperPath, atomically: true, encoding: .utf8)
+                _ = try run("/bin/chmod", ["+x", helperPath])
+
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/bin/sh")
+                proc.arguments = [helperPath]
+                try proc.run()
+
+                DispatchQueue.main.async {
+                    NSApp.terminate(nil)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.updating = false
+                    self.render()
+                    self.showError("업데이트 실패: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     func menuWillOpen(_ menu: NSMenu) { refresh() }
@@ -1004,9 +1217,13 @@ func selfTest() throws {
     var error: NSDictionary?
     let script = NSAppleScript(source: source)!
     precondition(script.compileAndReturnError(&error), "\(String(describing: error))")
+    precondition(isVersion("1.1.2", newerThan: "1.1.1"))
+    precondition(isVersion("v1.2.0", newerThan: "v1.1.9"))
+    precondition(!isVersion("1.1.1", newerThan: "1.1.1"))
+    precondition(!isVersion("1.1.0", newerThan: "1.1.1"))
     let live = try readState()
     guard live.power != nil else { throw AppError(message: live.powerError ?? "Live power state missing") }
-    print("PASS: status dot colors in light/dark appearance, click passthrough, SSH settings URL, parsing, desktop power, battery warnings, restore ownership, validation, guarded transactions, rollback, timeout, auth compilation, live read")
+    print("PASS: status dot colors in light/dark appearance, click passthrough, SSH settings URL, parsing, desktop power, battery warnings, restore ownership, validation, guarded transactions, rollback, timeout, auth compilation, live read, version comparison")
 }
 
 if CommandLine.arguments.contains("--self-test") {
