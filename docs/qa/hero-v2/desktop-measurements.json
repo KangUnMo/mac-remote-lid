@@ -1,0 +1,47 @@
+[
+  {
+    "label": "start",
+    "width": 1440,
+    "height": 900,
+    "scrollY": 704,
+    "stageTop": 90,
+    "hardwareY": 79.939,
+    "hardwareScale": 0.9000836800589654,
+    "previewY": 75.9588,
+    "cardInside": true,
+    "copyOpacity": 1,
+    "overflow": -15,
+    "hardwareTransform": "translate3d(-17.9863px, 79.939px, 0px) rotateY(-7.99543deg) rotateZ(-4.99733deg) scale(0.900084)",
+    "screenshot": "/Users/kwm0602/Documents/0_MyPlayground/원격지킴이-mac-app/docs/qa/hero-v2/desktop-start.png"
+  },
+  {
+    "label": "mid",
+    "width": 1440,
+    "height": 900,
+    "scrollY": 1114,
+    "stageTop": 90,
+    "hardwareY": -0.060975600000000005,
+    "hardwareScale": 1.010087192312946,
+    "previewY": 21.9588,
+    "cardInside": true,
+    "copyOpacity": 0.888042,
+    "overflow": -15,
+    "hardwareTransform": "translate3d(0.0137195px, -0.0609756px, 0px) rotateY(-1.99543deg) rotateZ(-1.49733deg) scale(1.01008)",
+    "screenshot": "/Users/kwm0602/Documents/0_MyPlayground/원격지킴이-mac-app/docs/qa/hero-v2/desktop-mid.png"
+  },
+  {
+    "label": "end",
+    "width": 1440,
+    "height": 900,
+    "scrollY": 1524,
+    "stageTop": 89.6875,
+    "hardwareY": -80,
+    "hardwareScale": 1.1199988805757128,
+    "previewY": -32,
+    "cardInside": true,
+    "copyOpacity": 0,
+    "overflow": -15,
+    "hardwareTransform": "translate3d(18px, -80px, 0px) rotateY(4deg) rotateZ(2deg) scale(1.12)",
+    "screenshot": "/Users/kwm0602/Documents/0_MyPlayground/원격지킴이-mac-app/docs/qa/hero-v2/desktop-end.png"
+  }
+]

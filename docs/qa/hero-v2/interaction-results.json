@@ -1,0 +1,13 @@
+{
+  "toggleOff": {
+    "sleep": "해제됨",
+    "restore": "복원 완료",
+    "summary": "앱이 변경한 전원 설정을 이전 값으로 복원했습니다."
+  },
+  "keyboardSpaceRestoresOn": true,
+  "download": {
+    "filename": "remote-lid-1.1.0-arm64.zip",
+    "bytes": 976132,
+    "sha256": "92fff17a3e58490baedaff27a49f6e3e6fbc0b88b4158d36a8fbec5e272d7e9f"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "reducedMotion": {
+    "stagePosition": "relative",
+    "storyHeight": 720,
+    "stageHeight": 720,
+    "hardwareTransform": "none",
+    "previewTransform": "none",
+    "copyOpacity": "1",
+    "meterDisplay": "none"
+  },
+  "narrow": {
+    "width": 320,
+    "overflow": -15,
+    "stagePosition": "relative"
+  },
+  "shortViewport": {
+    "width": 1440,
+    "height": 650,
+    "stagePosition": "relative",
+    "overflow": -15
+  },
+  "motionResumedAfterPreferenceChange": true,
+  "consoleAndNetworkErrors": []
+}

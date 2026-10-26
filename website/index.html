@@ -29,27 +29,32 @@
       <p class="compatibility" data-reveal>Apple Silicon <span>·</span> macOS 13 이상 <span>·</span> v1.1.0</p>
       <p class="build-note" data-reveal>MacBook · Mac mini · Mac Studio</p>
       <p class="build-note" data-reveal>개인용 로컬 서명 빌드 · Apple 공증 미적용 <a href="#distribution">설치 전 확인</a></p>
-      <div class="product-stage" data-reveal="panel">
-        <div class="stage-grid" data-parallax="0.35" aria-hidden="true"></div>
-        <div class="stage-topline"><span><span class="status-dot" aria-hidden="true"></span> YOUR MAC, STILL AWAKE</span><span>메뉴 막대에서, 필요한 만큼만.</span></div>
-        <div class="product-layout">
-          <div class="laptop-scene" data-parallax="-0.55" aria-hidden="true">
-            <div class="signal"><i></i><i></i><i></i><span></span></div>
-            <div class="laptop-lid"><span></span></div><div class="laptop-base"></div><div class="laptop-shadow"></div>
-            <div class="scene-caption">MacBook의 덮개 잠자기 방지 예시</div>
-          </div>
-          <div class="connection" aria-hidden="true"><span></span><i></i><span></span></div>
-          <div class="demo-window" id="demo-window" data-parallax="0.85">
-            <div class="window-bar"><span class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></span><span>원격지킴이</span><span class="preview-tag">MacBook 예시</span></div>
+      <div class="hero-story" aria-label="Mac 제품과 원격 모드 소개">
+        <div class="product-stage" data-reveal="panel">
+          <div class="stage-backdrop" aria-hidden="true"></div>
+          <div class="stage-wordmark" aria-hidden="true">STAY<br>AWAKE.</div>
+          <div class="stage-topline"><span><span class="status-dot" aria-hidden="true"></span> REMOTE LID / FOR MAC</span><span>MacBook · Mac mini · Mac Studio</span></div>
+          <div class="stage-copy"><p>작업이 이어지는 동안</p><h2>Mac은 깨어 있게.<br>설정은 원래대로.</h2></div>
+          <figure class="hardware-visual">
+            <picture>
+              <source media="(max-width: 700px)" srcset="assets/mac-hardware-hero-v2-mobile.webp">
+              <img src="assets/mac-hardware-hero-v2.webp" width="1536" height="1024" alt="알루미늄 소재의 MacBook과 두 가지 크기의 데스크톱 Mac을 함께 배치한 제품 렌더" decoding="async" fetchpriority="high">
+            </picture>
+          </figure>
+          <div class="demo-window" id="demo-window">
+            <div class="window-bar"><span class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></span><span>원격지킴이</span><span class="preview-tag">미리보기</span></div>
             <div class="demo-body">
-              <p class="demo-heading">Mac은 깨어 있고, 작업은 계속</p>
+              <div class="demo-app"><img src="icon.svg" width="40" height="40" alt=""><div><p class="demo-label">MAC REMOTE LID</p><h3 class="demo-heading">원격 모드</h3></div></div>
               <p class="demo-state" id="demo-state" aria-live="polite"><span class="status-dot" aria-hidden="true"></span> 원격 모드 켜짐</p>
-              <p class="demo-power">충전기 연결 · 82%<span>앱이 변경한 설정은 끌 때 이전 값으로 복원합니다.</span></p>
+              <div class="demo-settings"><div><span>시스템 잠자기 방지</span><strong id="demo-sleep">적용됨</strong></div><div><span>이전 전원 설정</span><strong id="demo-restore">복원 준비됨</strong></div></div>
               <div class="demo-toggle-row"><span>원격 모드</span><button class="demo-toggle" id="demo-toggle" type="button" role="switch" aria-checked="true" aria-label="미리보기 원격 모드" aria-describedby="demo-notice"><span></span></button></div>
+              <p class="demo-summary" id="demo-summary">끄면 앱이 변경한 전원 설정을<br>켜기 전의 값으로 복원합니다.</p>
             </div>
           </div>
+          <div class="stage-bottom"><div class="story-caption"><span class="is-active">켜기 전 상태를 기록합니다.</span><span>마치면 이전 설정으로 복원합니다.</span></div><p id="demo-notice">제품 렌더와 앱 미리보기입니다. 토글은 실제 시스템 설정을 변경하지 않습니다.</p></div>
+          <div class="story-meter" aria-hidden="true"><span></span></div>
         </div>
-        <p class="stage-bottom" id="demo-notice">MacBook 예시입니다. 데스크톱 Mac에는 배터리·덮개 상태를 표시하지 않습니다. 미리보기 토글은 실제 설정을 변경하지 않습니다.</p>
+        <p class="story-scroll-hint">아래에서 기능을 더 살펴보세요 <span aria-hidden="true">↓</span></p>
       </div>
     </section>
     <section class="intro-section wrap" id="how" aria-labelledby="how-title">

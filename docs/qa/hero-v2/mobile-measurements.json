@@ -1,0 +1,38 @@
+[
+  {
+    "label": "start",
+    "width": 390,
+    "height": 844,
+    "scrollY": 387,
+    "progress": 0.3608814461883408,
+    "hardwareY": 6.67769,
+    "previewY": 5.00827,
+    "stagePosition": "relative",
+    "overflow": -15,
+    "image": "http://127.0.0.1:52559/assets/mac-hardware-hero-v2-mobile.webp"
+  },
+  {
+    "label": "mid",
+    "width": 390,
+    "height": 844,
+    "scrollY": 587,
+    "progress": 0.4729890695067265,
+    "hardwareY": 1.29652,
+    "previewY": 0.972393,
+    "stagePosition": "relative",
+    "overflow": -15,
+    "image": "http://127.0.0.1:52559/assets/mac-hardware-hero-v2-mobile.webp"
+  },
+  {
+    "label": "end",
+    "width": 390,
+    "height": 844,
+    "scrollY": 937,
+    "progress": 0.6691774103139013,
+    "hardwareY": -8.12052,
+    "previewY": -6.09039,
+    "stagePosition": "relative",
+    "overflow": -15,
+    "image": "http://127.0.0.1:52559/assets/mac-hardware-hero-v2-mobile.webp"
+  }
+]
