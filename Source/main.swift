@@ -1,6 +1,48 @@
 import AppKit
 import IOKit.pwr_mgt
 import IOKit.ps
+import ServiceManagement
+import Darwin
+
+struct IPInfo {
+    let name: String
+    let label: String
+    let ip: String
+}
+
+func getLocalIPAddresses() -> [IPInfo] {
+    var addresses: [IPInfo] = []
+    var ifaddr: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
+    defer { freeifaddrs(ifaddr) }
+
+    for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+        guard let addrPtr = ptr.pointee.ifa_addr else { continue }
+        let flags = Int32(ptr.pointee.ifa_flags)
+        guard (flags & (IFF_UP | IFF_RUNNING)) == (IFF_UP | IFF_RUNNING),
+              (flags & IFF_LOOPBACK) == 0 else { continue }
+
+        if addrPtr.pointee.sa_family == UInt8(AF_INET) {
+            let name = String(cString: ptr.pointee.ifa_name)
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(addrPtr, socklen_t(addrPtr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+                let ip = String(cString: host)
+                let label: String
+                if name == "en0" {
+                    label = "Wi-Fi (en0)"
+                } else if name.hasPrefix("en") {
+                    label = "이더넷 (\(name))"
+                } else if name.hasPrefix("utun") {
+                    label = "Tailscale / VPN (\(name))"
+                } else {
+                    label = "네트워크 (\(name))"
+                }
+                addresses.append(IPInfo(name: name, label: label, ip: ip))
+            }
+        }
+    }
+    return addresses
+}
 
 struct AppError: LocalizedError {
     let message: String
@@ -290,7 +332,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let detailLabel = NSTextField(wrappingLabelWithString: "")
     let modeSwitch = NSSwitch()
     let restoreButton = NSButton(title: "이전 설정 복원…", target: nil, action: nil)
+    let launchCheckbox = NSButton(checkboxWithTitle: "로그인 시 자동 실행", target: nil, action: nil)
+    let ipLabel = NSTextField(wrappingLabelWithString: "")
     var timer: Timer?
+    var powerRunLoopSource: CFRunLoopSource?
     var busy = false
     var refreshing = false
     var warningVisible = false
@@ -331,7 +376,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         makeWindow()
         refresh()
         showWindow()
-        timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in self?.refresh() }
+        setupPowerMonitoring()
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refresh() }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke),
             name: NSWorkspace.didWakeNotification, object: nil)
     }
@@ -357,10 +403,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         restoreButton.bezelStyle = .rounded
         let toggleRow = NSStackView(views: [toggleLabel, modeSwitch, restoreButton])
         toggleRow.spacing = 14
+        launchCheckbox.target = self
+        launchCheckbox.action = #selector(toggleLaunchAtLogin)
+        ipLabel.textColor = .secondaryLabelColor
+        ipLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        ipLabel.maximumNumberOfLines = 3
         let note = NSTextField(wrappingLabelWithString: "전원을 안정적으로 연결하고 통풍되는 곳에 두세요.\n끄면 앱이 변경한 전원 설정을 이전 값으로 복원합니다.\n창을 닫아도 메뉴 막대에서 계속 실행됩니다.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 12)
-        let stack = NSStackView(views: [title, stateLabel, detailLabel, toggleRow, note])
+        let stack = NSStackView(views: [title, stateLabel, detailLabel, toggleRow, launchCheckbox, ipLabel, note])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 22
@@ -372,6 +423,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             stack.topAnchor.constraint(equalTo: panel.contentView!.topAnchor, constant: 28),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: panel.contentView!.bottomAnchor, constant: -24),
             detailLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            ipLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             note.widthAnchor.constraint(equalTo: stack.widthAnchor)
         ])
         window = panel
@@ -507,6 +559,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         modeSwitch.isEnabled = !working && live != nil && (sleepDisabled == 1 || storageError == nil)
         restoreButton.isHidden = saved == nil || storageError != nil
         restoreButton.isEnabled = !working && saved != nil && live != nil
+        launchCheckbox.state = isLaunchAtLoginEnabled ? .on : .off
+        launchCheckbox.isEnabled = !working
+
+        let ips = getLocalIPAddresses()
+        if !ips.isEmpty {
+            let ipSummary = ips.map { "\($0.label): \($0.ip)" }.joined(separator: "\n")
+            ipLabel.stringValue = "내 IP 주소:\n\(ipSummary)"
+            ipLabel.isHidden = false
+        } else {
+            ipLabel.stringValue = "연결된 네트워크 IP 없음"
+            ipLabel.isHidden = false
+        }
+
         menu.removeAllItems()
         item("원격지킴이 · \(label)")
         item(power)
@@ -524,10 +589,62 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         item("지금 상태 새로고침", action: #selector(refreshAction)).isEnabled = !working
         menu.addItem(.separator())
+
+        if !ips.isEmpty {
+            for info in ips {
+                let entry = menu.addItem(withTitle: "\(info.label): \(info.ip)", action: #selector(copyIPAction(_:)), keyEquivalent: "")
+                entry.target = self
+                entry.representedObject = info.ip
+                entry.toolTip = "클릭하면 IP 주소(\(info.ip))를 클립보드에 복사합니다."
+            }
+            menu.addItem(.separator())
+        }
+
+        let loginItem = item("로그인 시 자동 실행", action: #selector(toggleLaunchAtLogin))
+        loginItem.state = isLaunchAtLoginEnabled ? .on : .off
+        loginItem.isEnabled = !working
+
         item("제어 창 열기", action: #selector(showWindow))
         item("SSH 접속 허용 설정…", action: #selector(openSSHSettings))
         item("사용 안내", action: #selector(help))
         item("종료…", action: #selector(quit)).isEnabled = !busy && !warningVisible
+    }
+
+    func setupPowerMonitoring() {
+        let source = IOPSNotificationCreateRunLoopSource({ context in
+            guard let context = context else { return }
+            let app = Unmanaged<AppDelegate>.fromOpaque(context).takeUnretainedValue()
+            DispatchQueue.main.async {
+                app.refresh()
+            }
+        }, Unmanaged.passUnretained(self).toOpaque())
+        if let s = source?.takeRetainedValue() {
+            CFRunLoopAddSource(CFRunLoopGetMain(), s, .defaultMode)
+            powerRunLoopSource = s
+        }
+    }
+
+    var isLaunchAtLoginEnabled: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    @objc func toggleLaunchAtLogin() {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            showError("로그인 시 자동 실행 설정 변경에 실패했습니다: \(error.localizedDescription)")
+        }
+        render()
+    }
+
+    @objc func copyIPAction(_ sender: NSMenuItem) {
+        guard let ip = sender.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(ip, forType: .string)
     }
 
     func menuWillOpen(_ menu: NSMenu) { refresh() }
@@ -677,7 +794,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func help() {
         let alert = NSAlert()
         alert.messageText = "원격지킴이 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.1") · 개인용"
-        alert.informativeText = "토글로 원격 모드를 켜거나 끄세요. 실제 설정을 10초마다 확인합니다.\n\n끄면 앱이 변경한 전원 항목을 이전 값으로 복원합니다. MacBook에서 충전기가 없거나 배터리가 20% 이하이면 켜기 전에 확인합니다. Mac mini·Mac Studio 등은 배터리 경고 없이 사용합니다. 실행 중 위험 상태가 바뀌면 다시 알립니다. 자동으로 끄지는 않습니다.\n\n이 앱은 Codex 원격 연결 자체를 설정하거나 연결 여부를 검사하지 않습니다. 다른 잠자기 제어 앱과 함께 사용하지 마세요.\n\n강제 종료·전원 중단 후에도 설정은 남을 수 있습니다. 앱을 다시 열어 이전 설정을 복원해 주세요. 복원 파일이 손상되면 잠자기 방지만 긴급 해제할 수 있습니다.\n\n수동 긴급 해제: sudo pmset -a disablesleep 0\n개인용 로컬 서명 앱 · Apple 공증 없음."
+        alert.informativeText = "토글로 원격 모드를 켜거나 끄세요. 전원 이벤트와 실제 설정을 확인합니다.\n\n끄면 앱이 변경한 전원 항목을 이전 값으로 복원합니다. MacBook에서 충전기가 없거나 배터리가 20% 이하이면 켜기 전에 확인합니다. Mac mini·Mac Studio 등은 배터리 경고 없이 사용합니다. 실행 중 위험 상태가 바뀌면 다시 알립니다. 자동으로 끄지는 않습니다.\n\n이 앱은 Codex 원격 연결 자체를 설정하거나 연결 여부를 검사하지 않습니다. 다른 잠자기 제어 앱과 함께 사용하지 마세요.\n\n강제 종료·전원 중단 후에도 설정은 남을 수 있습니다. 앱을 다시 열어 이전 설정을 복원해 주세요. 복원 파일이 손상되면 잠자기 방지만 긴급 해제할 수 있습니다.\n\n수동 긴급 해제: sudo pmset -a disablesleep 0\n개인용 로컬 서명 앱 · Apple 공증 없음."
         alert.addButton(withTitle: "확인")
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
@@ -700,6 +817,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
+        if let source = powerRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .defaultMode)
+            powerRunLoopSource = nil
+        }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         if assertion != 0 { IOPMAssertionRelease(assertion) }
     }
