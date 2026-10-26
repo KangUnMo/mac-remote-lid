@@ -1,0 +1,9 @@
+.DS_Store
+*.app/
+*.zip
+build/
+website/downloads/
+Source/AppIcon.iconset/
+.swiftpm/
+.build/
+*.xcuserstate
