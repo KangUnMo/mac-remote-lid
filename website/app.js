@@ -121,3 +121,22 @@ if (hero && stage && story && 'IntersectionObserver' in window) {
   reducedMotion.addEventListener('change', applyMotionPreference);
   applyMotionPreference();
 }
+
+const copyBtn = document.getElementById('copy-install-cmd');
+const copyFeedback = document.getElementById('copy-feedback');
+if (copyBtn && copyFeedback) {
+  copyBtn.addEventListener('click', async () => {
+    const cmd = 'curl -fsSL https://raw.githubusercontent.com/KangUnMo/mac-remote-lid/main/install.sh | bash';
+    try {
+      await navigator.clipboard.writeText(cmd);
+      copyFeedback.textContent = '명령어가 클립보드에 복사되었습니다. 터미널에 붙여넣으세요!';
+      copyBtn.textContent = '복사됨 ✓';
+      setTimeout(() => {
+        copyFeedback.textContent = '';
+        copyBtn.textContent = '복사';
+      }, 3000);
+    } catch {
+      copyFeedback.textContent = '복사 실패. 명령어를 직접 복사해 주세요.';
+    }
+  });
+}
