@@ -17,7 +17,22 @@ Mac의 잠자기를 방지하는 개인용 macOS 메뉴 막대 앱입니다. 토
 3. 필요한 경우 macOS 창에서 관리자 인증을 진행합니다.
 4. 원격 작업을 마치면 토글을 끄거나 이전 설정 복원을 선택합니다.
 
+메뉴 막대 아이콘 중앙 도트는 잠자기 방지가 켜져 있으면 초록색, 꺼져 있으면 빨간색, 상태를 읽지 못하면 회색으로 표시됩니다. ‘SSH 접속 허용 설정…’ 메뉴는 시스템 설정의 공유 화면을 엽니다. 원격 로그인과 허용할 사용자는 해당 화면에서 직접 선택해 주세요. SSH를 자동으로 켜거나 원격 모드와 연동해 변경하지 않습니다.
+
 창을 닫아도 메뉴 막대에서 실행됩니다. 상태는 10초마다 확인합니다. MacBook에서 켜진 뒤 충전기 연결 여부나 저전력 위험 상태가 바뀌면 다시 알립니다. 데스크톱 Mac에는 배터리 확인 단계를 적용하지 않습니다. 경고는 원격 모드를 자동으로 해제하지 않습니다.
+
+## 최초 실행과 업데이트
+
+현재 빌드는 Apple 개발자 인증서 서명과 공증이 없습니다. 출처와 파일 무결성을 확인하고 신뢰하는 경우에만 실행해 주세요.
+
+1. ZIP을 풀고 앱을 응용 프로그램 폴더로 옮깁니다.
+2. 앱을 열어 본 뒤 실행 차단 경고가 나오면 ‘완료’를 선택합니다.
+3. 시스템 설정 → 개인정보 보호 및 보안에서 원격지킴이의 ‘그래도 열기’를 누릅니다.
+4. 인증 후 다시 ‘열기’를 선택합니다.
+
+[Apple 공식 최초 실행 안내](https://support.apple.com/ko-kr/102445)를 따릅니다. Gatekeeper 전체 비활성화나 격리 속성 제거는 필요하지 않습니다.
+
+업데이트할 때는 기존 앱에서 원격 모드를 끄고 종료한 뒤 앱을 교체합니다. 끄는 동안 Mac이 잠자기에 들어가 원격 연결이 끊길 수 있습니다. 복원 기록은 임의로 삭제하지 마세요.
 
 ## 변경하는 설정
 
@@ -68,8 +83,8 @@ sh Source/build.sh
 
 ```text
 build/원격지킴이.app
-website/downloads/remote-lid-1.1.0-arm64.zip
-website/downloads/remote-lid-1.1.0-arm64.zip.sha256
+website/downloads/remote-lid-1.1.1-arm64.zip
+website/downloads/remote-lid-1.1.1-arm64.zip.sha256
 ```
 
 ```sh
@@ -84,7 +99,7 @@ macOS IOPowerSources API로 내장 배터리 유무를 구분합니다. 배터�
 ## 다운로드 페이지
 
 - [공개 다운로드 페이지](https://KangUnMo.github.io/mac-remote-lid/)
-- [v1.1.0 미리보기 릴리스](https://github.com/KangUnMo/mac-remote-lid/releases/tag/v1.1.0)
+- [v1.1.1 미리보기 릴리스](https://github.com/KangUnMo/mac-remote-lid/releases/tag/v1.1.1)
 
 `website/index.html`은 외부 폰트, CDN, 분석 코드 없이 열 수 있는 정적 페이지입니다. 다운로드 버튼은 GitHub Releases의 앱 ZIP과 체크섬 파일을 가리킵니다. 로컬 빌드 결과는 기존 website/downloads 경로에 생성됩니다. 페이지의 토글은 화면 설명용이며 시스템 설정을 바꾸지 않습니다.
 
@@ -96,9 +111,9 @@ python3 -m http.server 8766 --bind 127.0.0.1 --directory website
 
 ## 공개 배포 준비
 
-현재 빌드는 로컬 임시 서명만 사용합니다. Apple 개발자 인증서 서명과 공증이 없어 다른 Mac에서 Gatekeeper에 차단될 수 있습니다. 빌드·서명 무결성 검사 통과는 공증 통과를 의미하지 않습니다. 보안 설정 해제나 격리 속성 제거로 해결하는 절차는 제공하지 않습니다.
+현재 빌드는 로컬 임시 서명만 사용합니다. Apple 개발자 인증서 서명과 공증이 없어 다른 Mac에서 Gatekeeper에 차단될 수 있습니다. 빌드·서명 무결성 검사 통과는 공증 통과를 의미하지 않습니다. 위 최초 실행 안내는 해당 앱에 대한 실행 예외를 사용자가 직접 허용하는 절차입니다. Gatekeeper 전체 비활성화나 격리 속성 제거 절차는 제공하지 않습니다.
 
-공개 배포 전에는 [Apple의 Developer ID 안내](https://developer.apple.com/developer-id/)와 [공증 요구 사항](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)을 따라 Developer ID Application 서명, Hardened Runtime, secure timestamp와 공증을 준비해 주세요. 공증 완료 후 앱에 티켓을 첨부하고 ZIP과 SHA-256을 다시 생성해야 합니다.
+사용자의 최초 실행 예외 없이 배포하려면 [Apple의 Developer ID 안내](https://developer.apple.com/developer-id/)와 [공증 요구 사항](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)을 따라 Developer ID Application 서명, Hardened Runtime, secure timestamp와 공증을 준비해 주세요. 공증 완료 후 앱에 티켓을 첨부하고 ZIP과 SHA-256을 다시 생성해야 합니다.
 
 소스는 [KangUnMo/mac-remote-lid](https://github.com/KangUnMo/mac-remote-lid) 공개 저장소에서 관리합니다.
 
@@ -106,7 +121,7 @@ python3 -m http.server 8766 --bind 127.0.0.1 --directory website
 
 `.github/workflows/pages.yml`은 main 브랜치의 website/ 또는 배포 설정이 변경되면 해당 정적 페이지를 GitHub Pages에 게시합니다. GitHub의 Pages 설정은 GitHub Actions 방식으로 활성화합니다. [배포 실행 내역](https://github.com/KangUnMo/mac-remote-lid/actions/workflows/pages.yml)에서 결과를 확인할 수 있습니다.
 
-현재 v1.1.0은 미리보기 릴리스입니다. 다음 버전을 배포할 때는 새 앱 ZIP·체크섬을 Releases에 공개한 다음 페이지의 다운로드 URL과 버전을 갱신합니다. 앱 ZIP은 소스 커밋이나 Pages 아티팩트에 포함하지 않습니다.
+현재 v1.1.1은 미리보기 릴리스입니다. 다음 버전을 배포할 때는 새 앱 ZIP·체크섬을 Releases에 공개한 다음 페이지의 다운로드 URL과 버전을 갱신합니다. 앱 ZIP은 소스 커밋이나 Pages 아티팩트에 포함하지 않습니다.
 
 ## 소스 구성
 

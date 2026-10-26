@@ -249,7 +249,22 @@ func authorize(_ command: String) throws {
     }
 }
 
-func menuIcon(active: Bool) -> NSImage {
+class StatusDotView: NSView {
+    var active: Bool? { didSet { needsDisplay = true } }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let color: NSColor = active.map { $0 ? .systemGreen : .systemRed } ?? .systemGray
+        color.setFill()
+        NSBezierPath(ovalIn: bounds.insetBy(dx: 0.25, dy: 0.25)).fill()
+    }
+}
+
+let remoteLoginSettingsURL = URL(string: "x-apple.systempreferences:com.apple.Sharing-Settings.extension?Services_RemoteLogin")!
+let sharingSettingsURL = URL(string: "x-apple.systempreferences:com.apple.preferences.sharing")!
+
+func menuIcon(active: Bool?) -> NSImage {
     let image = NSImage(size: NSSize(width: 22, height: 20), flipped: false) { _ in
         NSColor.black.setStroke()
         NSColor.black.setFill()
@@ -258,18 +273,17 @@ func menuIcon(active: Bool) -> NSImage {
         let base = NSBezierPath()
         base.move(to: NSPoint(x: 1, y: 3)); base.line(to: NSPoint(x: 21, y: 3))
         base.lineWidth = 1.8; base.lineCapStyle = .round; base.stroke()
-        let dot = NSBezierPath(ovalIn: NSRect(x: 9, y: 8, width: 4, height: 4))
-        if active { dot.fill() } else { dot.lineWidth = 1; dot.stroke() }
         return true
     }
     image.isTemplate = true
-    image.accessibilityDescription = active ? "원격 모드 켜짐" : "원격 모드 꺼짐"
+    image.accessibilityDescription = active.map { $0 ? "원격 모드 켜짐" : "원격 모드 꺼짐" } ?? "원격 모드 상태 확인 필요"
     return image
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let menu = NSMenu()
+    let statusDot = StatusDotView()
     let worker = DispatchQueue(label: "personal.remotelid.power", qos: .userInitiated)
     var window: NSWindow?
     let stateLabel = NSTextField(labelWithString: "상태 확인 중")
@@ -297,6 +311,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         status.menu = menu
+        if let button = status.button {
+            // 테두리는 템플릿으로 유지하고 도트만 분리해 메뉴 막대 색상과 선택 상태에 대응합니다.
+            statusDot.translatesAutoresizingMaskIntoConstraints = false
+            statusDot.setAccessibilityElement(false)
+            button.addSubview(statusDot)
+            NSLayoutConstraint.activate([
+                statusDot.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                statusDot.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                statusDot.widthAnchor.constraint(equalToConstant: 5),
+                statusDot.heightAnchor.constraint(equalToConstant: 5)
+            ])
+        }
         status.autosaveName = "RemoteLidStatus"
         status.isVisible = true
         menu.autoenablesItems = false
@@ -467,7 +493,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let power = live?.power?.text ?? "전원 상태 확인 불가"
         let details = [power, live?.lid].compactMap { $0 }.joined(separator: " · ")
         status.button?.title = ""
-        status.button?.image = menuIcon(active: sleepDisabled == 1)
+        let active = sleepDisabled.map { $0 == 1 }
+        status.button?.image = menuIcon(active: active)
+        statusDot.active = active
         status.button?.toolTip = "원격지킴이 · \(label)\n\(details)"
         stateLabel.stringValue = label
         stateLabel.textColor = fullyEnabled && saved != nil ? .systemGreen : .labelColor
@@ -497,6 +525,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item("지금 상태 새로고침", action: #selector(refreshAction)).isEnabled = !working
         menu.addItem(.separator())
         item("제어 창 열기", action: #selector(showWindow))
+        item("SSH 접속 허용 설정…", action: #selector(openSSHSettings))
         item("사용 안내", action: #selector(help))
         item("종료…", action: #selector(quit)).isEnabled = !busy && !warningVisible
     }
@@ -504,6 +533,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) { refresh() }
     @objc func refreshAction() { refresh() }
     @objc func woke() { refresh() }
+    @objc func openSSHSettings() {
+        menu.cancelTracking()
+        if NSWorkspace.shared.open(remoteLoginSettingsURL) { return }
+        if NSWorkspace.shared.open(sharingSettingsURL) { return }
+        showError("시스템 설정을 열지 못했습니다. 시스템 설정 → 일반 → 공유 → 원격 로그인에서 SSH 접속을 허용해 주세요.")
+    }
     @objc func toggleMode() {
         render()
         if sleepDisabled == 1 { disableMode() } else { enableMode() }
@@ -641,7 +676,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func help() {
         let alert = NSAlert()
-        alert.messageText = "원격지킴이 1.1 · 개인용"
+        alert.messageText = "원격지킴이 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.1") · 개인용"
         alert.informativeText = "토글로 원격 모드를 켜거나 끄세요. 실제 설정을 10초마다 확인합니다.\n\n끄면 앱이 변경한 전원 항목을 이전 값으로 복원합니다. MacBook에서 충전기가 없거나 배터리가 20% 이하이면 켜기 전에 확인합니다. Mac mini·Mac Studio 등은 배터리 경고 없이 사용합니다. 실행 중 위험 상태가 바뀌면 다시 알립니다. 자동으로 끄지는 않습니다.\n\n이 앱은 Codex 원격 연결 자체를 설정하거나 연결 여부를 검사하지 않습니다. 다른 잠자기 제어 앱과 함께 사용하지 마세요.\n\n강제 종료·전원 중단 후에도 설정은 남을 수 있습니다. 앱을 다시 열어 이전 설정을 복원해 주세요. 복원 파일이 손상되면 잠자기 방지만 긴급 해제할 수 있습니다.\n\n수동 긴급 해제: sudo pmset -a disablesleep 0\n개인용 로컬 서명 앱 · Apple 공증 없음."
         alert.addButton(withTitle: "확인")
         NSApp.activate(ignoringOtherApps: true)
@@ -685,6 +720,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 }
 
 func selfTest() throws {
+    _ = NSApplication.shared
+    for name in [NSAppearance.Name.aqua, .darkAqua] {
+        NSAppearance(named: name)!.performAsCurrentDrawingAppearance {
+            for active: Bool? in [true, false, nil] {
+                let icon = menuIcon(active: active)
+                precondition(icon.isTemplate)
+                precondition(icon.accessibilityDescription == (active.map { $0 ? "원격 모드 켜짐" : "원격 모드 꺼짐" } ?? "원격 모드 상태 확인 필요"))
+                let dot = StatusDotView(frame: NSRect(x: 0, y: 0, width: 20, height: 20))
+                dot.active = active
+                precondition(dot.hitTest(NSPoint(x: 10, y: 10)) == nil)
+                let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 20, pixelsHigh: 20,
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+                dot.draw(dot.bounds)
+                NSGraphicsContext.restoreGraphicsState()
+                let color = bitmap.colorAt(x: 10, y: 10)!.usingColorSpace(.deviceRGB)!
+                if active == true { precondition(color.greenComponent > color.redComponent + 0.2) }
+                else if active == false { precondition(color.redComponent > color.greenComponent + 0.2) }
+                else { precondition(abs(color.redComponent - color.greenComponent) < 0.05) }
+            }
+        }
+    }
+    precondition(remoteLoginSettingsURL.scheme == "x-apple.systempreferences")
+    precondition(remoteLoginSettingsURL.query == "Services_RemoteLogin")
     precondition(rootBoolean("SleepDisabled", in: " \"SleepDisabled\" = No") == false)
     precondition(rootBoolean("SleepDisabled", in: " \"SleepDisabled\" = Yes") == true)
     precondition(rootBoolean("SleepDisabled", in: " \"SleepDisabled\" = unknown") == nil)
@@ -824,7 +885,7 @@ func selfTest() throws {
     precondition(script.compileAndReturnError(&error), "\(String(describing: error))")
     let live = try readState()
     guard live.power != nil else { throw AppError(message: live.powerError ?? "Live power state missing") }
-    print("PASS: parsing, desktop power, battery warnings, restore ownership, validation, guarded transactions, rollback, timeout, auth compilation, live read")
+    print("PASS: status dot colors in light/dark appearance, click passthrough, SSH settings URL, parsing, desktop power, battery warnings, restore ownership, validation, guarded transactions, rollback, timeout, auth compilation, live read")
 }
 
 if CommandLine.arguments.contains("--self-test") {
