@@ -65,8 +65,9 @@ if [[ -z "${SOURCE_APP}" || ! -d "${SOURCE_APP}" ]]; then
 fi
 
 # 6. 기존 실행 중인 앱 종료
-if pgrep -x "원격지킴이" > /dev/null 2>&1; then
+if pgrep -x "RemoteLid" > /dev/null 2>&1 || pgrep -x "원격지킴이" > /dev/null 2>&1; then
     echo -e "${BLUE}==> 실행 중인 기존 원격지킴이를 종료합니다...${NC}"
+    killall "RemoteLid" 2>/dev/null || true
     killall "원격지킴이" 2>/dev/null || true
     sleep 1
 fi
