@@ -61,6 +61,71 @@ struct AppUpdateInfo {
     let downloadURL: URL
 }
 
+// 인수로 경로를 전달하여 공백과 셸 특수 문자가 있는 설치 경로도 보존합니다.
+let updateInstallScript = #"""
+set -eu
+old_pid=$1
+current=$2
+staged=$3
+backup=$4
+work=$5
+package=$6
+moved=0
+installed=0
+finish() {
+    status=$?
+    trap - EXIT
+    if [ "$status" -ne 0 ]; then
+        if [ "$moved" = 1 ]; then
+            if [ "$installed" = 1 ]; then /bin/rm -rf "$current"; fi
+            if ! /bin/mv "$backup" "$current"; then
+                /usr/bin/osascript -e 'display alert "원격지킴이 업데이트 복구 실패" message "기존 앱 백업을 보존했습니다. 설치 폴더의 .RemoteLidUpdate- 폴더를 확인해 주세요."' || true
+                exit "$status"
+            fi
+            /usr/bin/open "$current" || true
+        fi
+        /usr/bin/osascript -e 'display alert "원격지킴이 업데이트 실패" message "새 앱으로 교체하지 못했습니다. 기존 앱을 유지했습니다. 수동 설치를 시도해 주세요."' || true
+    fi
+    /bin/rm -rf "$work" "$package"
+    exit "$status"
+}
+trap finish EXIT
+attempt=0
+while /bin/kill -0 "$old_pid" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -le 150 ] || exit 1
+    /bin/sleep 0.2
+done
+/bin/mv "$current" "$backup"
+moved=1
+/bin/mv "$staged" "$current"
+installed=1
+/usr/bin/open "$current"
+"""#
+
+func updateNeedsRestore(saved: Bool, disabled: Int?, assertion: IOPMAssertionID) -> Bool {
+    saved || disabled != 0 || assertion != 0
+}
+
+func verifyUpdateChecksum(_ expected: String, actual: String) throws {
+    let digest = expected.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
+    let computed = actual.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
+    guard digest.count == 64, digest.allSatisfy({ $0.isASCII && $0.isHexDigit }),
+          digest.lowercased() == computed.lowercased() else {
+        throw AppError(message: "업데이트 파일의 SHA-256이 일치하지 않습니다. 기존 앱을 유지했습니다.")
+    }
+}
+
+func validateUpdateBundle(_ url: URL, version: String) throws {
+    guard let bundle = Bundle(url: url), bundle.bundleIdentifier == "personal.remotelid",
+          bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == version,
+          let executable = bundle.executableURL,
+          FileManager.default.isExecutableFile(atPath: executable.path) else {
+        throw AppError(message: "업데이트 앱의 식별자 또는 버전이 올바르지 않습니다.")
+    }
+    _ = try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", url.path])
+}
+
 func parseVersionNumbers(_ string: String) -> [Int] {
     let cleaned = string.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
     return cleaned.split(separator: ".").compactMap { Int($0) }
@@ -83,6 +148,80 @@ struct AppError: LocalizedError {
     let message: String
     var cancelled = false
     var errorDescription: String? { message }
+}
+
+struct DisplaySleepRequest {
+    let pid: Int32
+    let app: String
+    let reason: String
+    let systemDelay: Bool
+
+    var description: String {
+        "\(app) · PID \(pid)\(systemDelay ? " · 시스템 화면 끄기 지연" : "")\n요청 사유: \(reason)"
+    }
+}
+
+struct DisplaySleepReport {
+    var requests: [DisplaySleepRequest] = []
+    var error: String?
+
+    var summary: String {
+        if error != nil { return "화면 꺼짐 방해 요청 조회 실패" }
+        return requests.isEmpty ? "화면 꺼짐 방해 요청 없음" : "화면 꺼짐 방해 요청 \(requests.count)건"
+    }
+
+    var details: String {
+        if let error { return "\(error)\n잠시 후 새로고침해 주세요. 원격 모드 제어는 계속 사용할 수 있습니다." }
+        if requests.isEmpty { return "현재 조회된 화면 꺼짐 방해 요청이 없습니다.\n시스템 잠자기 방지 요청은 이 목록에 포함하지 않습니다." }
+        return requests.map(\.description).joined(separator: "\n\n")
+    }
+}
+
+func assertionProcessName(_ pid: Int32) -> String {
+    if let name = NSRunningApplication(processIdentifier: pid)?.localizedName { return name }
+    var buffer = [CChar](repeating: 0, count: 1024)
+    if proc_name(pid, &buffer, UInt32(buffer.count)) > 0 { return String(cString: buffer) }
+    return "이름 확인 불가"
+}
+
+func displaySleepRequests(_ values: [NSNumber: [[String: Any]]],
+    processName: (Int32) -> String = assertionProcessName) throws -> [DisplaySleepRequest] {
+    var requests: [DisplaySleepRequest] = []
+    for (number, assertions) in values {
+        guard let pid = Int32(exactly: number.int64Value), pid > 0 else {
+            throw AppError(message: "화면 꺼짐 요청의 프로세스 정보를 읽지 못했습니다.")
+        }
+        for assertion in assertions {
+            guard let type = assertion[kIOPMAssertionTypeKey] as? String else {
+                throw AppError(message: "화면 꺼짐 요청의 종류를 읽지 못했습니다.")
+            }
+            guard [kIOPMAssertionTypePreventUserIdleDisplaySleep, "NoDisplaySleepAssertion",
+                "InternalPreventDisplaySleep"].contains(type) else { continue }
+            guard let level = assertion[kIOPMAssertionLevelKey] as? NSNumber else {
+                throw AppError(message: "화면 꺼짐 요청의 활성 상태를 읽지 못했습니다.")
+            }
+            guard level.intValue != 0 else { continue }
+            let reason = (assertion[kIOPMAssertionNameKey] as? String)?
+                .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ") ?? ""
+            requests.append(DisplaySleepRequest(pid: pid, app: processName(pid),
+                reason: reason.isEmpty ? "앱에서 사유를 제공하지 않았습니다." : reason,
+                systemDelay: type == "InternalPreventDisplaySleep"))
+        }
+    }
+    return requests.sorted { ($0.app, $0.pid, $0.reason, $0.systemDelay ? 1 : 0) <
+        ($1.app, $1.pid, $1.reason, $1.systemDelay ? 1 : 0) }
+}
+
+func readDisplaySleepReport() -> DisplaySleepReport {
+    var raw: Unmanaged<CFDictionary>?
+    let status = IOPMCopyAssertionsByProcess(&raw)
+    let dictionary = raw?.takeRetainedValue()
+    guard status == kIOReturnSuccess,
+          let values = dictionary as? [NSNumber: [[String: Any]]] else {
+        return DisplaySleepReport(error: "macOS 전원 요청을 읽지 못했습니다. 오류 코드: \(status)")
+    }
+    do { return try DisplaySleepReport(requests: displaySleepRequests(values)) }
+    catch { return DisplaySleepReport(error: error.localizedDescription) }
 }
 
 func run(_ path: String, _ arguments: [String], timeout: TimeInterval = 10) throws -> String {
@@ -369,12 +508,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let restoreButton = NSButton(title: "이전 설정 복원…", target: nil, action: nil)
     let launchCheckbox = NSButton(checkboxWithTitle: "로그인 시 자동 실행", target: nil, action: nil)
     let ipLabel = NSTextField(wrappingLabelWithString: "")
+    let displaySleepLabel = NSTextField(wrappingLabelWithString: "화면 꺼짐 방해 요청 확인 중")
+    let displaySleepDetails = NSTextView()
+    let displayRefreshButton = NSButton(title: "지금 상태 새로고침", target: nil, action: nil)
+    var displaySleepReport: DisplaySleepReport?
     let updateBannerButton = NSButton(title: "새 버전 업데이트 가능", target: nil, action: nil)
     var timer: Timer?
     var powerRunLoopSource: CFRunLoopSource?
     var availableUpdate: AppUpdateInfo?
     var checkingUpdate = false
     var updating = false
+    var updateReadyToInstall = false
     var busy = false
     var refreshing = false
     var warningVisible = false
@@ -425,7 +569,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func makeWindow() {
-        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 440),
+        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 680),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         panel.title = "원격지킴이"
         panel.isReleasedWhenClosed = false
@@ -450,6 +594,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ipLabel.textColor = .secondaryLabelColor
         ipLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         ipLabel.maximumNumberOfLines = 3
+        displaySleepLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        displayRefreshButton.target = self
+        displayRefreshButton.action = #selector(refreshAction)
+        displayRefreshButton.bezelStyle = .rounded
+        let displayHeader = NSStackView(views: [displaySleepLabel, displayRefreshButton])
+        displayHeader.distribution = .fill
+        displaySleepDetails.isEditable = false
+        displaySleepDetails.isSelectable = true
+        displaySleepDetails.drawsBackground = false
+        displaySleepDetails.font = .systemFont(ofSize: 12)
+        displaySleepDetails.textColor = .secondaryLabelColor
+        displaySleepDetails.isHorizontallyResizable = false
+        displaySleepDetails.isVerticallyResizable = true
+        displaySleepDetails.autoresizingMask = [.width]
+        displaySleepDetails.textContainer?.widthTracksTextView = true
+        displaySleepDetails.textContainerInset = NSSize(width: 4, height: 6)
+        displaySleepDetails.setAccessibilityLabel("화면 꺼짐 방해 앱과 요청 사유")
+        let displayScroll = NSScrollView()
+        displayScroll.hasVerticalScroller = true
+        displayScroll.autohidesScrollers = true
+        displayScroll.drawsBackground = false
+        displayScroll.documentView = displaySleepDetails
+        let displayNote = NSTextField(wrappingLabelWithString: "60초마다 갱신합니다. 시스템 잠자기 방지는 별개입니다.\n영상 재생·캡처를 마친 뒤 해당 앱에서 종료해 주세요.")
+        displayNote.font = .systemFont(ofSize: 11)
+        displayNote.textColor = .secondaryLabelColor
+        let displaySection = NSStackView(views: [displayHeader, displayScroll, displayNote])
+        displaySection.orientation = .vertical
+        displaySection.alignment = .leading
+        displaySection.spacing = 6
         updateBannerButton.target = self
         updateBannerButton.action = #selector(updateAction)
         updateBannerButton.bezelStyle = .rounded
@@ -459,10 +632,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let note = NSTextField(wrappingLabelWithString: "전원을 안정적으로 연결하고 통풍되는 곳에 두세요.\n끄면 앱이 변경한 전원 설정을 이전 값으로 복원합니다.\n창을 닫아도 메뉴 막대에서 계속 실행됩니다.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 12)
-        let stack = NSStackView(views: [title, stateLabel, detailLabel, toggleRow, launchCheckbox, ipLabel, updateBannerButton, note])
+        let stack = NSStackView(views: [title, stateLabel, detailLabel, toggleRow, launchCheckbox, ipLabel, displaySection, updateBannerButton, note])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 22
+        stack.spacing = 16
         stack.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView!.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -472,6 +645,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: panel.contentView!.bottomAnchor, constant: -24),
             detailLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             ipLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            displaySection.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            displayHeader.widthAnchor.constraint(equalTo: displaySection.widthAnchor),
+            displayScroll.widthAnchor.constraint(equalTo: displaySection.widthAnchor),
+            displayScroll.heightAnchor.constraint(equalToConstant: 120),
+            displayNote.widthAnchor.constraint(equalTo: displaySection.widthAnchor),
             updateBannerButton.widthAnchor.constraint(equalTo: stack.widthAnchor),
             note.widthAnchor.constraint(equalTo: stack.widthAnchor)
         ])
@@ -533,9 +711,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         render()
         readAsync { [self] result in
             apply(result)
-            refreshing = false
-            render()
-            checkPowerRisk()
+            worker.async { [self] in
+                let report = readDisplaySleepReport()
+                DispatchQueue.main.async { [self] in
+                    displaySleepReport = report
+                    refreshing = false
+                    render()
+                    checkPowerRisk()
+                }
+            }
         }
     }
 
@@ -610,6 +794,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         restoreButton.isEnabled = !working && saved != nil && live != nil
         launchCheckbox.state = isLaunchAtLoginEnabled ? .on : .off
         launchCheckbox.isEnabled = !working
+        let displaySummary = displaySleepReport?.summary ?? "화면 꺼짐 방해 요청 확인 중"
+        displaySleepLabel.stringValue = displaySummary
+        displaySleepLabel.textColor = displaySleepReport?.error != nil ? .systemOrange : .labelColor
+        let displayDetails = displaySleepReport?.details ?? "macOS 전원 요청을 조회하고 있습니다."
+        if displaySleepDetails.string != displayDetails { displaySleepDetails.string = displayDetails }
+        displayRefreshButton.isEnabled = !working
 
         let ips = getLocalIPAddresses()
         if !ips.isEmpty {
@@ -649,6 +839,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item("잠자기 방지만 긴급 해제…", action: #selector(disableMode)).isEnabled = !working && live != nil
         }
         item("지금 상태 새로고침", action: #selector(refreshAction)).isEnabled = !working
+        menu.addItem(.separator())
+        let displayItem = item(displaySummary)
+        let displayMenu = NSMenu()
+        displayMenu.autoenablesItems = false
+        if let report = displaySleepReport, report.error == nil, !report.requests.isEmpty {
+            for request in report.requests {
+                let entry = NSMenuItem(title: String(request.description.replacingOccurrences(of: "\n", with: " · ").prefix(140)),
+                    action: nil, keyEquivalent: "")
+                entry.isEnabled = false
+                entry.toolTip = request.description
+                displayMenu.addItem(entry)
+            }
+        } else {
+            let entry = NSMenuItem(title: displayDetails.replacingOccurrences(of: "\n", with: " "), action: nil, keyEquivalent: "")
+            entry.isEnabled = false
+            displayMenu.addItem(entry)
+        }
+        displayItem.submenu = displayMenu
+        displayItem.isEnabled = true
         menu.addItem(.separator())
 
         if !ips.isEmpty {
@@ -721,7 +930,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func checkForUpdates(manual: Bool = false) {
         guard !checkingUpdate else { return }
         checkingUpdate = true
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.1"
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.3"
 
         guard let url = URL(string: "https://api.github.com/repos/KangUnMo/mac-remote-lid/releases") else {
             checkingUpdate = false
@@ -768,10 +977,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func promptUpdate(_ update: AppUpdateInfo) {
+        guard !working else { return }
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = "새 버전(\(update.version)) 업데이트"
-        alert.informativeText = "새로운 버전이 준비되었습니다. 지금 다운로드하여 업데이트할까요?\n\n업데이트가 완료되면 앱이 자동으로 재시작됩니다."
+        alert.informativeText = "새로운 버전이 준비되었습니다. 지금 다운로드하여 업데이트할까요?\n\n원격 모드가 켜져 있으면 이전 전원 설정을 복원합니다. 원격 연결이 끊길 수 있습니다. 업데이트 후 원격 모드는 직접 다시 켜 주세요.\n\n업데이트가 완료되면 앱이 자동으로 재시작됩니다."
         alert.addButton(withTitle: "지금 업데이트")
         alert.addButton(withTitle: "나중에")
         menu.cancelTracking()
@@ -793,19 +1003,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applyUpdate(_ update: AppUpdateInfo) {
-        guard !updating else { return }
-        updating = true
-        render()
-
-        if sleepDisabled == 1 {
+        guard !working else { return }
+        if updateNeedsRestore(saved: saved != nil, disabled: sleepDisabled, assertion: assertion) {
+            // 복원 작업이 진입한 뒤에 업데이트 상태를 설정해야 자체 작업 가드에 막히지 않습니다.
             turnOff { [weak self] success in
-                guard let self = self else { return }
-                if !success {
-                    self.updating = false
-                    self.render()
-                    self.showError("원격 모드 설정을 복원하지 못해 업데이트를 중단했습니다.")
-                    return
-                }
+                guard let self = self, success else { return }
                 self.downloadAndInstallUpdate(update)
             }
         } else {
@@ -814,43 +1016,51 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func downloadAndInstallUpdate(_ update: AppUpdateInfo) {
+        updating = true
+        render()
         worker.async { [weak self] in
             guard let self = self else { return }
+            let files = FileManager.default
+            let current = Bundle.main.bundleURL
+            let parent = current.deletingLastPathComponent()
+            let work = parent.appendingPathComponent(".RemoteLidUpdate-\(UUID().uuidString)", isDirectory: true)
+            let package = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("RemoteLidUpdate-\(UUID().uuidString)")
             do {
-                let currentBundle = Bundle.main.bundleURL.path
-                let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("RemoteLidUpdate-\(UUID().uuidString)")
-                try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-
-                let zipPath = tmpDir.appendingPathComponent("update.zip").path
-                _ = try run("/usr/bin/curl", ["-fL", update.downloadURL.absoluteString, "-o", zipPath], timeout: 60)
-                _ = try run("/usr/bin/ditto", ["-xk", zipPath, tmpDir.path], timeout: 30)
-
-                let sourceApp = tmpDir.appendingPathComponent("원격지킴이.app").path
-                guard FileManager.default.fileExists(atPath: sourceApp) else {
-                    throw AppError(message: "업데이트 파일에서 새 앱을 찾지 못했습니다.")
+                let version = update.version.hasPrefix("v") ? String(update.version.dropFirst()) : update.version
+                let expectedURL = "https://github.com/KangUnMo/mac-remote-lid/releases/download/\(update.version)/remote-lid-\(version)-arm64.zip"
+                guard version.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil,
+                      update.downloadURL.absoluteString == expectedURL,
+                      files.isWritableFile(atPath: parent.path) else {
+                    throw AppError(message: "업데이트 주소 또는 설치 폴더 권한을 확인하지 못했습니다. 수동 설치를 이용해 주세요.")
                 }
-
-                let helperScript = """
-                sleep 0.8
-                rm -rf "\(currentBundle)"
-                cp -R "\(sourceApp)" "\(currentBundle)"
-                xattr -cr "\(currentBundle)"
-                open "\(currentBundle)"
-                rm -rf "\(tmpDir.path)"
-                """
-                let helperPath = tmpDir.appendingPathComponent("install_helper.sh").path
-                try helperScript.write(toFile: helperPath, atomically: true, encoding: .utf8)
-                _ = try run("/bin/chmod", ["+x", helperPath])
-
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: "/bin/sh")
-                proc.arguments = [helperPath]
-                try proc.run()
-
+                try files.createDirectory(at: package, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+                let zip = package.appendingPathComponent("update.zip")
+                let checksum = package.appendingPathComponent("update.zip.sha256")
+                _ = try run("/usr/bin/curl", ["--proto", "=https", "--proto-redir", "=https", "-fL", update.downloadURL.absoluteString, "-o", zip.path], timeout: 60)
+                _ = try run("/usr/bin/curl", ["--proto", "=https", "--proto-redir", "=https", "-fL", update.downloadURL.absoluteString + ".sha256", "-o", checksum.path], timeout: 30)
+                try verifyUpdateChecksum(String(contentsOf: checksum, encoding: .utf8),
+                    actual: run("/usr/bin/shasum", ["-a", "256", zip.path]))
+                _ = try run("/usr/bin/ditto", ["-xk", zip.path, package.path], timeout: 30)
+                let source = package.appendingPathComponent("원격지킴이.app")
+                try validateUpdateBundle(source, version: version)
+                try files.createDirectory(at: work, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+                let staged = work.appendingPathComponent("원격지킴이.app")
+                _ = try run("/usr/bin/ditto", [source.path, staged.path], timeout: 30)
+                try validateUpdateBundle(staged, version: version)
+                let helper = package.appendingPathComponent("install_helper.sh")
+                try updateInstallScript.write(to: helper, atomically: true, encoding: .utf8)
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/sh")
+                process.arguments = [helper.path, String(ProcessInfo.processInfo.processIdentifier), current.path,
+                    staged.path, work.appendingPathComponent("previous.app").path, work.path, package.path]
+                try process.run()
                 DispatchQueue.main.async {
+                    self.updateReadyToInstall = true
                     NSApp.terminate(nil)
                 }
             } catch {
+                try? files.removeItem(at: work)
+                try? files.removeItem(at: package)
                 DispatchQueue.main.async {
                     self.updating = false
                     self.render()
@@ -1006,7 +1216,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func help() {
         let alert = NSAlert()
-        alert.messageText = "원격지킴이 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.1") · 개인용"
+        alert.messageText = "원격지킴이 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.3") · 개인용"
         alert.informativeText = "토글로 원격 모드를 켜거나 끄세요. 전원 이벤트와 실제 설정을 확인합니다.\n\n끄면 앱이 변경한 전원 항목을 이전 값으로 복원합니다. MacBook에서 충전기가 없거나 배터리가 20% 이하이면 켜기 전에 확인합니다. Mac mini·Mac Studio 등은 배터리 경고 없이 사용합니다. 실행 중 위험 상태가 바뀌면 다시 알립니다. 자동으로 끄지는 않습니다.\n\n이 앱은 Codex 원격 연결 자체를 설정하거나 연결 여부를 검사하지 않습니다. 다른 잠자기 제어 앱과 함께 사용하지 마세요.\n\n강제 종료·전원 중단 후에도 설정은 남을 수 있습니다. 앱을 다시 열어 이전 설정을 복원해 주세요. 복원 파일이 손상되면 잠자기 방지만 긴급 해제할 수 있습니다.\n\n수동 긴급 해제: sudo pmset -a disablesleep 0\n개인용 로컬 서명 앱 · Apple 공증 없음."
         alert.addButton(withTitle: "확인")
         NSApp.activate(ignoringOtherApps: true)
@@ -1016,6 +1226,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func quit() { NSApp.terminate(nil) }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if updateReadyToInstall { return .terminateNow }
+        guard !updating else { return .terminateCancel }
         guard !busy, !warningVisible, !terminationPending else { return .terminateCancel }
         guard saved != nil || sleepDisabled == 1 || assertion != 0 else { return .terminateNow }
         guard !refreshing else { return .terminateCancel }
@@ -1055,6 +1267,42 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
 func selfTest() throws {
     _ = NSApplication.shared
+    func request(_ type: String, _ level: Int = 255, _ reason: String = "") -> [String: Any] {
+        [kIOPMAssertionTypeKey: type, kIOPMAssertionLevelKey: level, kIOPMAssertionNameKey: reason]
+    }
+    let requests = try displaySleepRequests([
+        200: [request("NoDisplaySleepAssertion", 255, "Capturing"),
+              request(kIOPMAssertionTypePreventUserIdleDisplaySleep, 255, "Video\nWake Lock"),
+              request("NoDisplaySleepAssertion", 0, "Inactive")],
+        100: [request("InternalPreventDisplaySleep")],
+        300: [request(kIOPMAssertionTypePreventUserIdleSystemSleep),
+              request("NoIdleSleepAssertion"), request("UserIsActive"), request("FutureAssertion")]
+    ], processName: { "Process \($0)" })
+    precondition(requests.count == 3)
+    precondition(requests[0].pid == 100 && requests[0].systemDelay)
+    precondition(requests[0].reason == "앱에서 사유를 제공하지 않았습니다.")
+    precondition(requests[1].app == "Process 200" && requests[1].reason == "Capturing")
+    precondition(requests[2].reason == "Video Wake Lock" && !requests[2].systemDelay)
+    let report = DisplaySleepReport(requests: requests)
+    precondition(report.summary == "화면 꺼짐 방해 요청 3건")
+    precondition(report.details.contains("PID 200") && report.details.contains("시스템 화면 끄기 지연"))
+    precondition(DisplaySleepReport().summary == "화면 꺼짐 방해 요청 없음")
+    let failed = DisplaySleepReport(error: "TEST_ERROR")
+    precondition(failed.summary.contains("조회 실패") && failed.details.contains("TEST_ERROR"))
+    precondition(!failed.summary.contains("요청 없음"))
+    let empty = try displaySleepRequests([:])
+    precondition(empty.isEmpty)
+    for invalid: [NSNumber: [[String: Any]]] in [
+        [-1: [request("NoDisplaySleepAssertion")]],
+        [1: [[:]]],
+        [1: [[kIOPMAssertionTypeKey: "NoDisplaySleepAssertion"]]],
+        [1: [[kIOPMAssertionTypeKey: "NoDisplaySleepAssertion", kIOPMAssertionLevelKey: "invalid"]]]
+    ] {
+        do { _ = try displaySleepRequests(invalid); preconditionFailure("Invalid assertion accepted") }
+        catch { precondition(error is AppError) }
+    }
+    let liveDisplayReport = readDisplaySleepReport()
+    guard liveDisplayReport.error == nil else { throw AppError(message: liveDisplayReport.error!) }
     for name in [NSAppearance.Name.aqua, .darkAqua] {
         NSAppearance(named: name)!.performAsCurrentDrawingAppearance {
             for active: Bool? in [true, false, nil] {
@@ -1221,9 +1469,101 @@ func selfTest() throws {
     precondition(isVersion("v1.2.0", newerThan: "v1.1.9"))
     precondition(!isVersion("1.1.1", newerThan: "1.1.1"))
     precondition(!isVersion("1.1.0", newerThan: "1.1.1"))
+    precondition(updateNeedsRestore(saved: true, disabled: 0, assertion: 0))
+    precondition(updateNeedsRestore(saved: false, disabled: 1, assertion: 0))
+    precondition(updateNeedsRestore(saved: false, disabled: nil, assertion: 0))
+    precondition(!updateNeedsRestore(saved: false, disabled: 0, assertion: 0))
+    let digest = String(repeating: "a", count: 64)
+    try verifyUpdateChecksum(digest + "  update.zip\n", actual: digest + "  /tmp/update.zip")
+    for invalid in ["", "abc", String(repeating: "z", count: 64), String(repeating: "b", count: 64)] {
+        do { try verifyUpdateChecksum(invalid, actual: digest); preconditionFailure("Invalid checksum accepted") }
+        catch { precondition(error is AppError) }
+    }
+    let updateTests = FileManager.default.temporaryDirectory.appendingPathComponent("RemoteLid-UpdateTest-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: updateTests, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: updateTests) }
+    for scenario in ["success", "missing-stage", "launch-failure", "exit-timeout"] {
+        let root = updateTests.appendingPathComponent(scenario)
+        let current = root.appendingPathComponent("앱 ' $(literal).app")
+        let work = root.appendingPathComponent("work")
+        let package = root.appendingPathComponent("package")
+        let staged = work.appendingPathComponent("new.app")
+        let backup = work.appendingPathComponent("previous.app")
+        for url in [current, staged, package] {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        }
+        try "old".write(to: current.appendingPathComponent("marker"), atomically: true, encoding: .utf8)
+        try "new".write(to: staged.appendingPathComponent("marker"), atomically: true, encoding: .utf8)
+        if scenario == "missing-stage" { try FileManager.default.removeItem(at: staged) }
+        var script = updateInstallScript.replacingOccurrences(of: "/usr/bin/open", with: "mock_open")
+            .replacingOccurrences(of: "/usr/bin/osascript", with: "mock_notice")
+        script = "mock_open() { return \(scenario == "launch-failure" ? 1 : 0); }\nmock_notice() { :; }\n" + script
+        if scenario == "exit-timeout" { script = script.replacingOccurrences(of: "-le 150", with: "-le 1") }
+        let pid = scenario == "exit-timeout" ? String(ProcessInfo.processInfo.processIdentifier) : "2147483647"
+        var succeeded = false
+        do {
+            _ = try run("/bin/sh", ["-c", script, "update-test", pid, current.path,
+                staged.path, backup.path, work.path, package.path], timeout: 5)
+            succeeded = true
+        } catch { precondition(scenario != "success", "\(error)") }
+        precondition(succeeded == (scenario == "success"))
+        let marker = try String(contentsOf: current.appendingPathComponent("marker"), encoding: .utf8)
+        precondition(marker == (scenario == "success" ? "new" : "old"))
+        precondition(!FileManager.default.fileExists(atPath: work.path))
+        precondition(!FileManager.default.fileExists(atPath: package.path))
+    }
+    do { try validateUpdateBundle(updateTests, version: "1.1.3"); preconditionFailure("Invalid app accepted") }
+    catch { precondition(error is AppError) }
+    class UpdateHarness: AppDelegate {
+        var restoreCalled = false
+        var installCalled = false
+        var restoreSucceeds = true
+        override func turnOff(completion: @escaping (Bool) -> Void = { _ in }) {
+            precondition(!working, "Update must not block restoration")
+            restoreCalled = true
+            completion(restoreSucceeds)
+        }
+        override func downloadAndInstallUpdate(_ update: AppUpdateInfo) { installCalled = true }
+    }
+    let harness = UpdateHarness()
+    let candidate = AppUpdateInfo(version: "v1.1.3", downloadURL: URL(string: "https://example.com/test.zip")!)
+    harness.applyUpdate(candidate)
+    precondition(harness.restoreCalled && harness.installCalled)
+    harness.restoreSucceeds = false
+    harness.installCalled = false
+    harness.applyUpdate(candidate)
+    precondition(!harness.installCalled)
+    harness.updating = true
+    precondition(harness.applicationShouldTerminate(NSApplication.shared) == .terminateCancel)
+    harness.updateReadyToInstall = true
+    precondition(harness.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
+    NSStatusBar.system.removeStatusItem(harness.status)
     let live = try readState()
     guard live.power != nil else { throw AppError(message: live.powerError ?? "Live power state missing") }
-    print("PASS: status dot colors in light/dark appearance, click passthrough, SSH settings URL, parsing, desktop power, battery warnings, restore ownership, validation, guarded transactions, rollback, timeout, auth compilation, live read, version comparison")
+    let app = AppDelegate()
+    app.live = live
+    app.makeWindow()
+    app.availableUpdate = AppUpdateInfo(version: "test", downloadURL: URL(string: "https://example.com/test.zip")!)
+    app.lastError = Array(repeating: "긴 상태 안내입니다.", count: 12).joined(separator: " ")
+    app.displaySleepReport = report
+    app.render()
+    app.window!.contentView!.layoutSubtreeIfNeeded()
+    precondition(app.displaySleepDetails.frame.width > 400)
+    precondition(app.displaySleepDetails.string == report.details)
+    precondition(app.displaySleepLabel.stringValue == report.summary)
+    let submenu = app.menu.items.first { $0.title == report.summary }?.submenu
+    precondition(submenu?.items.count == requests.count)
+    precondition(submenu?.items.first?.toolTip == requests.first?.description)
+    for state in [DisplaySleepReport(), failed] {
+        app.displaySleepReport = state
+        app.render()
+        precondition(app.displaySleepLabel.stringValue == state.summary)
+        precondition(app.displaySleepDetails.string == state.details)
+        precondition(app.menu.items.first { $0.title == state.summary }?.submenu?.items.count == 1)
+    }
+    app.window?.close()
+    NSStatusBar.system.removeStatusItem(app.status)
+    print("PASS: update restore sequencing, checksum validation, helper success/rollback/exit timeout, bundle rejection, display sleep request filtering, inactive/system exclusion, multiple requests, missing reasons, invalid data, error/empty distinction, live assertion query, window/menu rendering, status dot colors in light/dark appearance, click passthrough, SSH settings URL, parsing, desktop power, battery warnings, restore ownership, validation, guarded transactions, rollback, timeout, auth compilation, live read, version comparison")
 }
 
 if CommandLine.arguments.contains("--self-test") {
@@ -1237,6 +1577,9 @@ if CommandLine.arguments.contains("--self-test") {
         print(try run("/usr/bin/pmset", ["-g"]))
         print(try run("/usr/bin/pmset", ["-g", "custom"]))
         print(try run("/usr/bin/pmset", ["-g", "batt"]))
+        let displayReport = readDisplaySleepReport()
+        print(displayReport.summary)
+        print(displayReport.details)
     } catch { fputs("\(error)\n", stderr); exit(1) }
 } else {
     if let identifier = Bundle.main.bundleIdentifier,

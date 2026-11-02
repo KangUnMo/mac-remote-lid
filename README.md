@@ -19,9 +19,10 @@ Mac의 잠자기를 방지하는 개인용 macOS 메뉴 막대 앱입니다. 토
 
 메뉴 막대 아이콘 중앙 도트는 잠자기 방지가 켜져 있으면 초록색, 꺼져 있으면 빨간색, 상태를 읽지 못하면 회색으로 표시됩니다.
 
+- **화면 꺼짐 방해 앱 모니터링**: 제어 창과 메뉴에서 앱 이름·PID·요청 사유를 확인합니다. 60초 주기와 수동 새로고침으로 갱신하며, 시스템 잠자기 방지와 구분합니다. 조회 결과는 저장하지 않습니다.
 - **IP 주소 원클릭 복사**: 메뉴 막대에서 현재 Mac의 활성 IP 주소(Wi-Fi, 이더넷, Tailscale 등)를 확인하고 클릭하여 바로 클립보드에 복사할 수 있습니다.
 - **로그인 시 자동 실행**: 메뉴 막대 또는 제어 창에서 '로그인 시 자동 실행'을 켜면 Mac 재부팅 후에도 앱이 자동으로 실행됩니다.
-- **실시간 전원 감지**: 10초 주기 폴링 대신 macOS IOKit 전원 알림 이벤트로 전원 어댑터 연결/해제 및 배터리 위험 상태를 즉시 감지하여 배터리 소모를 최소화합니다.
+- **실시간 전원 감지**: 60초 주기 상태 조회와 macOS IOKit 전원 알림 이벤트로 전원 어댑터 연결/해제 및 배터리 위험 상태를 즉시 감지하여 배터리 소모를 최소화합니다.
 - **인앱 원클릭 자동 업데이트**: 메뉴의 '업데이트 확인…'을 누르거나 새 버전이 감지되면 메뉴 상단에 `⚡️ 새 버전으로 업데이트`가 표시되며, 원클릭으로 새 버전을 다운로드하고 자동 재시작합니다.
 - ‘SSH 접속 허용 설정…’ 메뉴는 시스템 설정의 공유 화면을 엽니다. 원격 로그인과 허용할 사용자는 해당 화면에서 직접 선택해 주세요. SSH를 자동으로 켜거나 원격 모드와 연동해 변경하지 않습니다.
 
@@ -47,7 +48,9 @@ curl -fsSL https://raw.githubusercontent.com/KangUnMo/mac-remote-lid/main/instal
 
 [Apple 공식 최초 실행 안내](https://support.apple.com/ko-kr/102445)를 따릅니다.
 
-업데이트할 때는 기존 앱에서 원격 모드를 끄고 종료한 뒤 위 설치 명령어를 다시 실행하거나 새 앱으로 교체합니다. 복원 기록은 임의로 삭제하지 마세요.
+1.1.2에서 업데이트할 때는 먼저 원격 모드를 끈 뒤 메뉴의 `업데이트 확인…`을 선택해 주세요. 기존 1.1.2의 업데이트 코드는 새 릴리스 게시만으로 바뀌지 않습니다. 수동 설치 시에는 기존 앱을 종료한 뒤 교체합니다. 복원 기록은 임의로 삭제하지 마세요.
+
+1.1.3부터는 전원 설정 복원 후 업데이트를 진행하며, ZIP 체크섬·앱 식별자·버전·서명 무결성을 확인합니다. 설치 폴더에 새 앱을 준비하고 기존 프로세스 종료를 기다린 뒤 교체합니다. 기존 앱은 `.RemoteLidUpdate-` 임시 폴더에 백업하며 성공 후 정리합니다. 교체 또는 실행 요청 실패 시 복원을 시도하고, 복원까지 실패하면 백업을 보존하여 안내합니다. 업데이트 후 원격 모드는 직접 다시 켜 주세요. 실행 요청 성공은 앱의 장시간 정상 동작까지 보장하지 않습니다.
 
 ## 변경하는 설정
 
@@ -98,8 +101,8 @@ sh Source/build.sh
 
 ```text
 build/원격지킴이.app
-website/downloads/remote-lid-1.1.1-arm64.zip
-website/downloads/remote-lid-1.1.1-arm64.zip.sha256
+website/downloads/remote-lid-1.1.3-arm64.zip
+website/downloads/remote-lid-1.1.3-arm64.zip.sha256
 ```
 
 ```sh
@@ -114,7 +117,7 @@ macOS IOPowerSources API로 내장 배터리 유무를 구분합니다. 배터�
 ## 다운로드 페이지
 
 - [공개 다운로드 페이지](https://KangUnMo.github.io/mac-remote-lid/)
-- [v1.1.1 미리보기 릴리스](https://github.com/KangUnMo/mac-remote-lid/releases/tag/v1.1.1)
+- [v1.1.3 릴리스](https://github.com/KangUnMo/mac-remote-lid/releases/tag/v1.1.3)
 
 `website/index.html`은 외부 폰트, CDN, 분석 코드 없이 열 수 있는 정적 페이지입니다. 다운로드 버튼은 GitHub Releases의 앱 ZIP과 체크섬 파일을 가리킵니다. 로컬 빌드 결과는 기존 website/downloads 경로에 생성됩니다. 페이지의 토글은 화면 설명용이며 시스템 설정을 바꾸지 않습니다.
 
@@ -136,7 +139,7 @@ python3 -m http.server 8766 --bind 127.0.0.1 --directory website
 
 `.github/workflows/pages.yml`은 main 브랜치의 website/ 또는 배포 설정이 변경되면 해당 정적 페이지를 GitHub Pages에 게시합니다. GitHub의 Pages 설정은 GitHub Actions 방식으로 활성화합니다. [배포 실행 내역](https://github.com/KangUnMo/mac-remote-lid/actions/workflows/pages.yml)에서 결과를 확인할 수 있습니다.
 
-현재 v1.1.1은 미리보기 릴리스입니다. 다음 버전을 배포할 때는 새 앱 ZIP·체크섬을 Releases에 공개한 다음 페이지의 다운로드 URL과 버전을 갱신합니다. 앱 ZIP은 소스 커밋이나 Pages 아티팩트에 포함하지 않습니다.
+현재 버전은 v1.1.3입니다. 다음 버전을 배포할 때는 새 앱 ZIP·체크섬을 Releases에 공개한 다음 페이지의 다운로드 URL과 버전을 갱신합니다. 앱 ZIP은 소스 커밋이나 Pages 아티팩트에 포함하지 않습니다.
 
 ## 소스 구성
 
