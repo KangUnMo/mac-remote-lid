@@ -418,6 +418,56 @@ func settingsCommands(ac: [String: Int], disabled: Int) -> String {
     (ac.isEmpty ? "" : acCommand(ac) + "\n") + "/usr/bin/pmset -a disablesleep \(disabled)"
 }
 
+func formatCurrentSettings(_ state: SystemState?) -> String {
+    guard let settings = state?.settings else {
+        return "현재 시스템 전원 설정을 확인하고 있습니다."
+    }
+    var lines: [String] = []
+    lines.append("시스템 잠자기 방지 (SleepDisabled): \(settings.sleepDisabled == 1 ? "켜짐 (1)" : "꺼짐 (0)")")
+    if let sleep = settings.ac["sleep"] {
+        lines.append("AC 전원 자동 잠자기 (sleep): \(sleep == 0 ? "안 함 (0분)" : "\(sleep)분")")
+    }
+    if let womp = settings.ac["womp"] {
+        lines.append("네트워크 접속 시 깨우기 (womp): \(womp == 1 ? "켜짐 (1)" : "꺼짐 (0)")")
+    }
+    if let keepalive = settings.ac["tcpkeepalive"] {
+        lines.append("TCP 연결 유지 (tcpkeepalive): \(keepalive == 1 ? "켜짐 (1)" : "꺼짐 (0)")")
+    }
+    if let lid = state?.lid {
+        lines.append("덮개 상태: \(lid)")
+    }
+    return lines.joined(separator: "\n")
+}
+
+func formatSavedSettings(_ saved: SavedSettings?, storageError: String?) -> String {
+    if let storageError {
+        return storageError
+    }
+    guard let saved else {
+        return "저장된 이전 설정(복원 기록)이 없습니다.\n원격 모드를 켜면 변경 직전의 전원 설정이 이곳에 기록됩니다."
+    }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "ko_KR")
+    formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    let owned = ownedAC(saved)
+    var lines: [String] = []
+    lines.append("저장 시각: \(formatter.string(from: saved.savedAt))")
+    lines.append("시스템 잠자기 방지 (SleepDisabled): \(saved.sleepDisabled == 1 ? "켜짐 (1)" : "꺼짐 (0)") · 복원 대상")
+    if let sleep = saved.ac["sleep"] {
+        let tag = owned["sleep"] != nil ? "복원 대상" : "변경 안 함"
+        lines.append("AC 전원 자동 잠자기 (sleep): \(sleep == 0 ? "안 함 (0분)" : "\(sleep)분") · \(tag)")
+    }
+    if let womp = saved.ac["womp"] {
+        let tag = owned["womp"] != nil ? "복원 대상" : "변경 안 함"
+        lines.append("네트워크 접속 시 깨우기 (womp): \(womp == 1 ? "켜짐 (1)" : "꺼짐 (0)") · \(tag)")
+    }
+    if let keepalive = saved.ac["tcpkeepalive"] {
+        let tag = owned["tcpkeepalive"] != nil ? "복원 대상" : "변경 안 함"
+        lines.append("TCP 연결 유지 (tcpkeepalive): \(keepalive == 1 ? "켜짐 (1)" : "꺼짐 (0)") · \(tag)")
+    }
+    return lines.joined(separator: "\n")
+}
+
 func transactionCommands(ac: [String: Int], disabled: Int, expected: SavedSettings) throws -> String {
     try expected.validate()
     try SavedSettings(version: 1, sleepDisabled: disabled,
@@ -508,8 +558,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let restoreButton = NSButton(title: "이전 설정 복원…", target: nil, action: nil)
     let launchCheckbox = NSButton(checkboxWithTitle: "로그인 시 자동 실행", target: nil, action: nil)
     let ipLabel = NSTextField(wrappingLabelWithString: "")
+    let sshCopyButton = NSButton(title: "SSH 접속 명령어 복사", target: nil, action: nil)
+    let infoTabControl = NSSegmentedControl(labels: ["화면 꺼짐 방해", "현재 설정", "이전 설정"], trackingMode: .selectOne, target: nil, action: nil)
     let displaySleepLabel = NSTextField(wrappingLabelWithString: "화면 꺼짐 방해 요청 확인 중")
     let displaySleepDetails = NSTextView()
+    let displayScroll = NSScrollView()
+    let displayNote = NSTextField(wrappingLabelWithString: "60초마다 갱신합니다. 시스템 잠자기 방지는 별개입니다.\n영상 재생·캡처를 마친 뒤 해당 앱에서 종료해 주세요.")
     let displayRefreshButton = NSButton(title: "지금 상태 새로고침", target: nil, action: nil)
     var displaySleepReport: DisplaySleepReport?
     let updateBannerButton = NSButton(title: "새 버전 업데이트 가능", target: nil, action: nil)
@@ -569,7 +623,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func makeWindow() {
-        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 680),
+        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 720),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         panel.title = "원격지킴이"
         panel.isReleasedWhenClosed = false
@@ -594,35 +648,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ipLabel.textColor = .secondaryLabelColor
         ipLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         ipLabel.maximumNumberOfLines = 3
+        sshCopyButton.target = self
+        sshCopyButton.action = #selector(copyPrimarySSHCommandAction)
+        sshCopyButton.bezelStyle = .rounded
+        sshCopyButton.controlSize = .small
+        sshCopyButton.font = .systemFont(ofSize: 11, weight: .medium)
+        infoTabControl.selectedSegment = 0
+        infoTabControl.target = self
+        infoTabControl.action = #selector(tabChanged)
+        infoTabControl.segmentStyle = .rounded
         displaySleepLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         displayRefreshButton.target = self
         displayRefreshButton.action = #selector(refreshAction)
         displayRefreshButton.bezelStyle = .rounded
-        let displayHeader = NSStackView(views: [displaySleepLabel, displayRefreshButton])
-        displayHeader.distribution = .fill
+        let tabRow = NSStackView(views: [infoTabControl, displayRefreshButton])
+        tabRow.distribution = .fill
         displaySleepDetails.isEditable = false
         displaySleepDetails.isSelectable = true
         displaySleepDetails.drawsBackground = false
-        displaySleepDetails.font = .systemFont(ofSize: 12)
-        displaySleepDetails.textColor = .secondaryLabelColor
+        displaySleepDetails.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        displaySleepDetails.textColor = .labelColor
         displaySleepDetails.isHorizontallyResizable = false
         displaySleepDetails.isVerticallyResizable = true
         displaySleepDetails.autoresizingMask = [.width]
         displaySleepDetails.textContainer?.widthTracksTextView = true
-        displaySleepDetails.textContainerInset = NSSize(width: 4, height: 6)
-        displaySleepDetails.setAccessibilityLabel("화면 꺼짐 방해 앱과 요청 사유")
-        let displayScroll = NSScrollView()
+        displaySleepDetails.textContainerInset = NSSize(width: 8, height: 8)
+        displaySleepDetails.setAccessibilityLabel("하단 상세 정보")
         displayScroll.hasVerticalScroller = true
         displayScroll.autohidesScrollers = true
-        displayScroll.drawsBackground = false
+        displayScroll.borderType = .bezelBorder
+        displayScroll.drawsBackground = true
+        displayScroll.backgroundColor = .textBackgroundColor
+        displayScroll.wantsLayer = true
+        displayScroll.layer?.cornerRadius = 8
+        displayScroll.layer?.borderWidth = 1
+        displayScroll.layer?.borderColor = NSColor.separatorColor.cgColor
         displayScroll.documentView = displaySleepDetails
-        let displayNote = NSTextField(wrappingLabelWithString: "60초마다 갱신합니다. 시스템 잠자기 방지는 별개입니다.\n영상 재생·캡처를 마친 뒤 해당 앱에서 종료해 주세요.")
         displayNote.font = .systemFont(ofSize: 11)
         displayNote.textColor = .secondaryLabelColor
-        let displaySection = NSStackView(views: [displayHeader, displayScroll, displayNote])
+        let displaySection = NSStackView(views: [tabRow, displaySleepLabel, displayScroll, displayNote])
         displaySection.orientation = .vertical
         displaySection.alignment = .leading
-        displaySection.spacing = 6
+        displaySection.spacing = 8
         updateBannerButton.target = self
         updateBannerButton.action = #selector(updateAction)
         updateBannerButton.bezelStyle = .rounded
@@ -632,10 +699,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let note = NSTextField(wrappingLabelWithString: "전원을 안정적으로 연결하고 통풍되는 곳에 두세요.\n끄면 앱이 변경한 전원 설정을 이전 값으로 복원합니다.\n창을 닫아도 메뉴 막대에서 계속 실행됩니다.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 12)
-        let stack = NSStackView(views: [title, stateLabel, detailLabel, toggleRow, launchCheckbox, ipLabel, displaySection, updateBannerButton, note])
+        let stack = NSStackView(views: [title, stateLabel, detailLabel, toggleRow, launchCheckbox, ipLabel, sshCopyButton, displaySection, updateBannerButton, note])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 16
+        stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView!.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -646,9 +713,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             detailLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             ipLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             displaySection.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            displayHeader.widthAnchor.constraint(equalTo: displaySection.widthAnchor),
+            tabRow.widthAnchor.constraint(equalTo: displaySection.widthAnchor),
+            displaySleepLabel.widthAnchor.constraint(equalTo: displaySection.widthAnchor),
             displayScroll.widthAnchor.constraint(equalTo: displaySection.widthAnchor),
-            displayScroll.heightAnchor.constraint(equalToConstant: 120),
+            displayScroll.heightAnchor.constraint(equalToConstant: 128),
             displayNote.widthAnchor.constraint(equalTo: displaySection.widthAnchor),
             updateBannerButton.widthAnchor.constraint(equalTo: stack.widthAnchor),
             note.widthAnchor.constraint(equalTo: stack.widthAnchor)
@@ -795,20 +863,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         launchCheckbox.state = isLaunchAtLoginEnabled ? .on : .off
         launchCheckbox.isEnabled = !working
         let displaySummary = displaySleepReport?.summary ?? "화면 꺼짐 방해 요청 확인 중"
-        displaySleepLabel.stringValue = displaySummary
-        displaySleepLabel.textColor = displaySleepReport?.error != nil ? .systemOrange : .labelColor
         let displayDetails = displaySleepReport?.details ?? "macOS 전원 요청을 조회하고 있습니다."
-        if displaySleepDetails.string != displayDetails { displaySleepDetails.string = displayDetails }
+        let selectedTab = infoTabControl.selectedSegment
+        let activeTabTitle: String
+        let activeTabContent: String
+        let activeTabNote: String
+        if selectedTab == 1 {
+            activeTabTitle = "현재 적용된 전원 설정"
+            activeTabContent = formatCurrentSettings(live)
+            activeTabNote = "실제 커널(SleepDisabled) 및 AC 전원(pmset) 기준 현재 상태입니다."
+            displaySleepLabel.textColor = .labelColor
+        } else if selectedTab == 2 {
+            activeTabTitle = saved != nil ? "저장된 이전 설정 (복원 예정값)" : "저장된 이전 설정 없음"
+            activeTabContent = formatSavedSettings(saved, storageError: storageError)
+            activeTabNote = "원격 모드를 끄거나 '이전 설정 복원…'을 누르면 위 값으로 되돌립니다."
+            displaySleepLabel.textColor = storageError != nil ? .systemOrange : .labelColor
+        } else {
+            activeTabTitle = displaySummary
+            activeTabContent = displayDetails
+            activeTabNote = "60초마다 갱신합니다. 시스템 잠자기 방지는 별개입니다.\n영상 재생·캡처를 마친 뒤 해당 앱에서 종료해 주세요."
+            displaySleepLabel.textColor = displaySleepReport?.error != nil ? .systemOrange : .labelColor
+        }
+        displaySleepLabel.stringValue = activeTabTitle
+        if displaySleepDetails.string != activeTabContent { displaySleepDetails.string = activeTabContent }
+        displayNote.stringValue = activeTabNote
+        displayScroll.layer?.borderColor = NSColor.separatorColor.cgColor
         displayRefreshButton.isEnabled = !working
 
         let ips = getLocalIPAddresses()
+        let sshUser = NSUserName()
         if !ips.isEmpty {
             let ipSummary = ips.map { "\($0.label): \($0.ip)" }.joined(separator: "\n")
+            let primaryIP = (ips.first(where: { $0.name.hasPrefix("utun") }) ?? ips[0]).ip
             ipLabel.stringValue = "내 IP 주소:\n\(ipSummary)"
             ipLabel.isHidden = false
+            if sshCopyButton.title != "복사됨 ✓" {
+                sshCopyButton.title = "SSH 명령어 복사 (ssh \(sshUser)@\(primaryIP))"
+            }
+            sshCopyButton.isHidden = false
         } else {
             ipLabel.stringValue = "연결된 네트워크 IP 없음"
             ipLabel.isHidden = false
+            sshCopyButton.isHidden = true
         }
 
         if let update = availableUpdate {
@@ -866,6 +962,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 entry.target = self
                 entry.representedObject = info.ip
                 entry.toolTip = "클릭하면 IP 주소(\(info.ip))를 클립보드에 복사합니다."
+
+                let sshCmd = "ssh \(sshUser)@\(info.ip)"
+                let sshEntry = menu.addItem(withTitle: "  ↳ SSH 명령어 복사 (\(sshCmd))", action: #selector(copyIPAction(_:)), keyEquivalent: "")
+                sshEntry.target = self
+                sshEntry.representedObject = sshCmd
+                sshEntry.toolTip = "클릭하면 '\(sshCmd)' 명령어를 클립보드에 복사합니다."
             }
             menu.addItem(.separator())
         }
@@ -879,6 +981,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item("SSH 접속 허용 설정…", action: #selector(openSSHSettings))
         item("사용 안내", action: #selector(help))
         item("종료…", action: #selector(quit)).isEnabled = !busy && !warningVisible && !updating
+    }
+
+    @objc func tabChanged() {
+        render()
+    }
+
+    @objc func copyPrimarySSHCommandAction() {
+        let ips = getLocalIPAddresses()
+        guard !ips.isEmpty else { return }
+        let primaryIP = (ips.first(where: { $0.name.hasPrefix("utun") }) ?? ips[0]).ip
+        let cmd = "ssh \(NSUserName())@\(primaryIP)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(cmd, forType: .string)
+        sshCopyButton.title = "복사됨 ✓"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.sshCopyButton.title = "SSH 명령어 복사"
+            self?.render()
+        }
     }
 
     func setupPowerMonitoring() {
@@ -1556,11 +1676,21 @@ func selfTest() throws {
     precondition(submenu?.items.first?.toolTip == requests.first?.description)
     for state in [DisplaySleepReport(), failed] {
         app.displaySleepReport = state
+        app.infoTabControl.selectedSegment = 0
         app.render()
         precondition(app.displaySleepLabel.stringValue == state.summary)
         precondition(app.displaySleepDetails.string == state.details)
         precondition(app.menu.items.first { $0.title == state.summary }?.submenu?.items.count == 1)
     }
+    app.infoTabControl.selectedSegment = 1
+    app.render()
+    precondition(app.displaySleepLabel.stringValue == "현재 적용된 전원 설정")
+    precondition(app.displaySleepDetails.string.contains("SleepDisabled"))
+    app.saved = original
+    app.infoTabControl.selectedSegment = 2
+    app.render()
+    precondition(app.displaySleepLabel.stringValue == "저장된 이전 설정 (복원 예정값)")
+    precondition(app.displaySleepDetails.string.contains("복원 대상"))
     app.window?.close()
     NSStatusBar.system.removeStatusItem(app.status)
     print("PASS: update restore sequencing, checksum validation, helper success/rollback/exit timeout, bundle rejection, display sleep request filtering, inactive/system exclusion, multiple requests, missing reasons, invalid data, error/empty distinction, live assertion query, window/menu rendering, status dot colors in light/dark appearance, click passthrough, SSH settings URL, parsing, desktop power, battery warnings, restore ownership, validation, guarded transactions, rollback, timeout, auth compilation, live read, version comparison")
