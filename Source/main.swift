@@ -570,6 +570,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var timer: Timer?
     var powerRunLoopSource: CFRunLoopSource?
     var availableUpdate: AppUpdateInfo?
+    var lastUpdateCheck: Date?
     var checkingUpdate = false
     var updating = false
     var updateReadyToInstall = false
@@ -786,6 +787,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     refreshing = false
                     render()
                     checkPowerRisk()
+                    if lastUpdateCheck.map({ Date().timeIntervalSince($0) >= 3600 }) ?? true {
+                        checkForUpdates(manual: false)
+                    }
                 }
             }
         }
@@ -1050,7 +1054,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func checkForUpdates(manual: Bool = false) {
         guard !checkingUpdate else { return }
         checkingUpdate = true
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.3"
+        lastUpdateCheck = Date()
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.4"
 
         guard let url = URL(string: "https://api.github.com/repos/KangUnMo/mac-remote-lid/releases") else {
             checkingUpdate = false
