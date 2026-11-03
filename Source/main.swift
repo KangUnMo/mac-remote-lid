@@ -150,14 +150,14 @@ struct AppError: LocalizedError {
     var errorDescription: String? { message }
 }
 
-struct DisplaySleepRequest {
+struct DisplaySleepRequest: Equatable {
     let pid: Int32
     let app: String
     let reason: String
-    let systemDelay: Bool
+    var count: Int = 1
 
     var description: String {
-        "\(app) · PID \(pid)\(systemDelay ? " · 시스템 화면 끄기 지연" : "")\n요청 사유: \(reason)"
+        "\(app) · PID \(pid)\(count > 1 ? " (\(count)건)" : "")\n요청 사유: \(reason)"
     }
 }
 
@@ -165,15 +165,29 @@ struct DisplaySleepReport {
     var requests: [DisplaySleepRequest] = []
     var error: String?
 
+    var appNames: [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for req in requests where seen.insert(req.app).inserted {
+            result.append(req.app)
+        }
+        return result
+    }
+
     var summary: String {
-        if error != nil { return "화면 꺼짐 방해 요청 조회 실패" }
-        return requests.isEmpty ? "화면 꺼짐 방해 요청 없음" : "화면 꺼짐 방해 요청 \(requests.count)건"
+        if error != nil { return "화면 꺼짐 방해 앱 조회 실패" }
+        let apps = appNames
+        guard let first = apps.first else { return "화면 자동 꺼짐 정상 (본체만 깨움)" }
+        return apps.count == 1 ? "⚠️ 화면 안 꺼짐 원인: \(first)" : "⚠️ 화면 안 꺼짐 원인: \(first) 외 \(apps.count - 1)개"
     }
 
     var details: String {
         if let error { return "\(error)\n잠시 후 새로고침해 주세요. 원격 모드 제어는 계속 사용할 수 있습니다." }
-        if requests.isEmpty { return "현재 조회된 화면 꺼짐 방해 요청이 없습니다.\n시스템 잠자기 방지 요청은 이 목록에 포함하지 않습니다." }
-        return requests.map(\.description).joined(separator: "\n\n")
+        if requests.isEmpty {
+            return "현재 화면 꺼짐을 막고 있는 외부 앱이 없습니다.\n원격지킴이는 Mac 본체 잠자기만 방지하며 화면은 켜두지 않습니다."
+        }
+        return "원격지킴이는 화면을 켜두지 않습니다. 현재 아래 외부 앱이 화면 꺼짐을 막고 있습니다:\n\n" +
+            requests.map(\.description).joined(separator: "\n\n")
     }
 }
 
@@ -186,7 +200,7 @@ func assertionProcessName(_ pid: Int32) -> String {
 
 func displaySleepRequests(_ values: [NSNumber: [[String: Any]]],
     processName: (Int32) -> String = assertionProcessName) throws -> [DisplaySleepRequest] {
-    var requests: [DisplaySleepRequest] = []
+    var counts: [String: (pid: Int32, app: String, reason: String, count: Int)] = [:]
     for (number, assertions) in values {
         guard let pid = Int32(exactly: number.int64Value), pid > 0 else {
             throw AppError(message: "화면 꺼짐 요청의 프로세스 정보를 읽지 못했습니다.")
@@ -195,21 +209,28 @@ func displaySleepRequests(_ values: [NSNumber: [[String: Any]]],
             guard let type = assertion[kIOPMAssertionTypeKey] as? String else {
                 throw AppError(message: "화면 꺼짐 요청의 종류를 읽지 못했습니다.")
             }
-            guard [kIOPMAssertionTypePreventUserIdleDisplaySleep, "NoDisplaySleepAssertion",
-                "InternalPreventDisplaySleep"].contains(type) else { continue }
+            guard [kIOPMAssertionTypePreventUserIdleDisplaySleep, "NoDisplaySleepAssertion"].contains(type) else { continue }
             guard let level = assertion[kIOPMAssertionLevelKey] as? NSNumber else {
                 throw AppError(message: "화면 꺼짐 요청의 활성 상태를 읽지 못했습니다.")
             }
             guard level.intValue != 0 else { continue }
-            let reason = (assertion[kIOPMAssertionNameKey] as? String)?
+            let rawReason = (assertion[kIOPMAssertionNameKey] as? String)?
                 .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ") ?? ""
-            requests.append(DisplaySleepRequest(pid: pid, app: processName(pid),
-                reason: reason.isEmpty ? "앱에서 사유를 제공하지 않았습니다." : reason,
-                systemDelay: type == "InternalPreventDisplaySleep"))
+            if rawReason == "com.apple.powermanagement.delayDisplayOff" { continue }
+            let app = processName(pid)
+            let reason = rawReason.isEmpty ? "앱에서 사유를 제공하지 않았습니다." : rawReason
+            let key = "\(pid)\u{0}\(app)\u{0}\(reason)"
+            if var existing = counts[key] {
+                existing.count += 1
+                counts[key] = existing
+            } else {
+                counts[key] = (pid: pid, app: app, reason: reason, count: 1)
+            }
         }
     }
-    return requests.sorted { ($0.app, $0.pid, $0.reason, $0.systemDelay ? 1 : 0) <
-        ($1.app, $1.pid, $1.reason, $1.systemDelay ? 1 : 0) }
+    return counts.values
+        .map { DisplaySleepRequest(pid: $0.pid, app: $0.app, reason: $0.reason, count: $0.count) }
+        .sorted { ($0.app, $0.pid, $0.reason) < ($1.app, $1.pid, $1.reason) }
 }
 
 func readDisplaySleepReport() -> DisplaySleepReport {
@@ -885,8 +906,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             activeTabTitle = displaySummary
             activeTabContent = displayDetails
-            activeTabNote = "60초마다 갱신합니다. 시스템 잠자기 방지는 별개입니다.\n영상 재생·캡처를 마친 뒤 해당 앱에서 종료해 주세요."
-            displaySleepLabel.textColor = displaySleepReport?.error != nil ? .systemOrange : .labelColor
+            activeTabNote = "60초마다 갱신합니다. 원격지킴이는 본체 잠자기만 막고 화면은 켜두지 않습니다.\n화면이 안 꺼진다면 위 외부 앱에서 영상 재생·캡처를 종료해 주세요."
+            displaySleepLabel.textColor = (displaySleepReport?.error != nil || !(displaySleepReport?.requests.isEmpty ?? true)) ? .systemOrange : .labelColor
         }
         displaySleepLabel.stringValue = activeTabTitle
         if displaySleepDetails.string != activeTabContent { displaySleepDetails.string = activeTabContent }
@@ -940,24 +961,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         item("지금 상태 새로고침", action: #selector(refreshAction)).isEnabled = !working
         menu.addItem(.separator())
-        let displayItem = item(displaySummary)
-        let displayMenu = NSMenu()
-        displayMenu.autoenablesItems = false
-        if let report = displaySleepReport, report.error == nil, !report.requests.isEmpty {
-            for request in report.requests {
-                let entry = NSMenuItem(title: String(request.description.replacingOccurrences(of: "\n", with: " · ").prefix(140)),
-                    action: nil, keyEquivalent: "")
-                entry.isEnabled = false
-                entry.toolTip = request.description
-                displayMenu.addItem(entry)
-            }
-        } else {
-            let entry = NSMenuItem(title: displayDetails.replacingOccurrences(of: "\n", with: " "), action: nil, keyEquivalent: "")
-            entry.isEnabled = false
-            displayMenu.addItem(entry)
-        }
-        displayItem.submenu = displayMenu
-        displayItem.isEnabled = true
+        let displayItem = item(displaySummary, action: #selector(openDisplaySleepTab))
+        displayItem.toolTip = "원격지킴이는 화면을 켜두지 않습니다. 클릭하면 제어 창에서 상세 내역을 확인합니다."
         menu.addItem(.separator())
 
         if !ips.isEmpty {
@@ -989,6 +994,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func tabChanged() {
         render()
+    }
+
+    @objc func openDisplaySleepTab() {
+        infoTabControl.selectedSegment = 0
+        render()
+        showWindow()
     }
 
     @objc func copyPrimarySSHCommandAction() {
@@ -1055,7 +1066,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !checkingUpdate else { return }
         checkingUpdate = true
         lastUpdateCheck = Date()
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.4"
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.5"
 
         guard let url = URL(string: "https://api.github.com/repos/KangUnMo/mac-remote-lid/releases") else {
             checkingUpdate = false
@@ -1397,24 +1408,29 @@ func selfTest() throws {
     }
     let requests = try displaySleepRequests([
         200: [request("NoDisplaySleepAssertion", 255, "Capturing"),
+              request("NoDisplaySleepAssertion", 255, "Capturing"),
               request(kIOPMAssertionTypePreventUserIdleDisplaySleep, 255, "Video\nWake Lock"),
               request("NoDisplaySleepAssertion", 0, "Inactive")],
-        100: [request("InternalPreventDisplaySleep")],
+        100: [request("InternalPreventDisplaySleep"),
+              request("NoDisplaySleepAssertion", 255, "com.apple.powermanagement.delayDisplayOff")],
+        250: [request("NoDisplaySleepAssertion", 255, "")],
         300: [request(kIOPMAssertionTypePreventUserIdleSystemSleep),
               request("NoIdleSleepAssertion"), request("UserIsActive"), request("FutureAssertion")]
     ], processName: { "Process \($0)" })
     precondition(requests.count == 3)
-    precondition(requests[0].pid == 100 && requests[0].systemDelay)
-    precondition(requests[0].reason == "앱에서 사유를 제공하지 않았습니다.")
-    precondition(requests[1].app == "Process 200" && requests[1].reason == "Capturing")
-    precondition(requests[2].reason == "Video Wake Lock" && !requests[2].systemDelay)
+    precondition(requests[0].app == "Process 200" && requests[0].reason == "Capturing" && requests[0].count == 2)
+    precondition(requests[0].description.contains("(2건)"))
+    precondition(requests[1].app == "Process 200" && requests[1].reason == "Video Wake Lock" && requests[1].count == 1)
+    precondition(requests[2].app == "Process 250" && requests[2].reason == "앱에서 사유를 제공하지 않았습니다.")
     let report = DisplaySleepReport(requests: requests)
-    precondition(report.summary == "화면 꺼짐 방해 요청 3건")
-    precondition(report.details.contains("PID 200") && report.details.contains("시스템 화면 끄기 지연"))
-    precondition(DisplaySleepReport().summary == "화면 꺼짐 방해 요청 없음")
+    precondition(report.summary == "⚠️ 화면 안 꺼짐 원인: Process 200 외 1개")
+    precondition(report.details.contains("PID 200") && report.details.contains("원격지킴이는 화면을 켜두지 않습니다."))
+    let singleReport = DisplaySleepReport(requests: [requests[0]])
+    precondition(singleReport.summary == "⚠️ 화면 안 꺼짐 원인: Process 200")
+    precondition(DisplaySleepReport().summary == "화면 자동 꺼짐 정상 (본체만 깨움)")
     let failed = DisplaySleepReport(error: "TEST_ERROR")
     precondition(failed.summary.contains("조회 실패") && failed.details.contains("TEST_ERROR"))
-    precondition(!failed.summary.contains("요청 없음"))
+    precondition(!failed.summary.contains("정상"))
     let empty = try displaySleepRequests([:])
     precondition(empty.isEmpty)
     for invalid: [NSNumber: [[String: Any]]] in [
@@ -1676,16 +1692,17 @@ func selfTest() throws {
     precondition(app.displaySleepDetails.frame.width > 400)
     precondition(app.displaySleepDetails.string == report.details)
     precondition(app.displaySleepLabel.stringValue == report.summary)
-    let submenu = app.menu.items.first { $0.title == report.summary }?.submenu
-    precondition(submenu?.items.count == requests.count)
-    precondition(submenu?.items.first?.toolTip == requests.first?.description)
+    let displayMenuItem = app.menu.items.first { $0.title == report.summary }
+    precondition(displayMenuItem != nil && displayMenuItem?.submenu == nil)
+    precondition(displayMenuItem?.action == #selector(AppDelegate.openDisplaySleepTab))
     for state in [DisplaySleepReport(), failed] {
         app.displaySleepReport = state
         app.infoTabControl.selectedSegment = 0
         app.render()
         precondition(app.displaySleepLabel.stringValue == state.summary)
         precondition(app.displaySleepDetails.string == state.details)
-        precondition(app.menu.items.first { $0.title == state.summary }?.submenu?.items.count == 1)
+        let menuItem = app.menu.items.first { $0.title == state.summary }
+        precondition(menuItem != nil && menuItem?.submenu == nil)
     }
     app.infoTabControl.selectedSegment = 1
     app.render()
