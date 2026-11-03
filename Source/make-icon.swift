@@ -11,29 +11,40 @@ for size in [16, 32, 128, 256, 512] {
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         let context = NSGraphicsContext.current!.cgContext
         context.scaleBy(x: CGFloat(pixels) / 1024, y: CGFloat(pixels) / 1024)
-        let tile = NSBezierPath(roundedRect: NSRect(x: 70, y: 70, width: 884, height: 884), xRadius: 205, yRadius: 205)
-        let gradient = NSGradient(starting: NSColor(calibratedRed: 0.10, green: 0.20, blue: 0.39, alpha: 1),
-            ending: NSColor(calibratedRed: 0.04, green: 0.08, blue: 0.18, alpha: 1))!
-        gradient.draw(in: tile, angle: 70)
-        NSColor(calibratedRed: 0.88, green: 0.94, blue: 1, alpha: 1).setFill()
-        NSBezierPath(roundedRect: NSRect(x: 233, y: 283, width: 558, height: 366), xRadius: 34, yRadius: 34).fill()
-        NSColor(calibratedRed: 0.10, green: 0.23, blue: 0.34, alpha: 1).setFill()
-        NSBezierPath(roundedRect: NSRect(x: 255, y: 305, width: 514, height: 321), xRadius: 17, yRadius: 17).fill()
-        NSColor(calibratedRed: 0.90, green: 0.95, blue: 1, alpha: 1).setFill()
+
+        // 브랜드 A안: 실버·캔버스 중립 타일 (#ECEEF1 ~ #FCFCFD) + 테두리 (#D9DDE1)
+        let tileRect = NSRect(x: 70, y: 70, width: 884, height: 884)
+        let tile = NSBezierPath(roundedRect: tileRect, xRadius: 205, yRadius: 205)
+        let gradient = NSGradient(
+            starting: NSColor(srgbRed: 0.925, green: 0.933, blue: 0.945, alpha: 1),
+            ending: NSColor(srgbRed: 0.988, green: 0.988, blue: 0.992, alpha: 1)
+        )!
+        gradient.draw(in: tile, angle: 90)
+        NSColor(srgbRed: 0.851, green: 0.867, blue: 0.882, alpha: 1).setStroke()
+        tile.lineWidth = 14
+        tile.stroke()
+
+        // 흑연색(#202124) 화면 윤곽 및 하단 받침선
+        let graphite = NSColor(srgbRed: 0.125, green: 0.129, blue: 0.141, alpha: 1)
+        graphite.setStroke()
+
+        let screen = NSBezierPath(roundedRect: NSRect(x: 288, y: 392, width: 448, height: 308), xRadius: 42, yRadius: 42)
+        screen.lineWidth = 42
+        screen.lineJoinStyle = .round
+        screen.stroke()
+
         let base = NSBezierPath()
-        base.move(to: NSPoint(x: 186, y: 275)); base.line(to: NSPoint(x: 838, y: 275))
-        base.curve(to: NSPoint(x: 788, y: 231), controlPoint1: NSPoint(x: 838, y: 242), controlPoint2: NSPoint(x: 814, y: 231))
-        base.line(to: NSPoint(x: 236, y: 231))
-        base.curve(to: NSPoint(x: 186, y: 275), controlPoint1: NSPoint(x: 210, y: 231), controlPoint2: NSPoint(x: 186, y: 242))
-        base.close(); base.fill()
-        let mint = NSColor(calibratedRed: 0.29, green: 0.94, blue: 0.75, alpha: 1)
-        mint.setStroke(); mint.setFill()
-        for radius: CGFloat in [92, 154, 216] {
-            let wave = NSBezierPath()
-            wave.appendArc(withCenter: NSPoint(x: 512, y: 508), radius: radius, startAngle: 45, endAngle: 135)
-            wave.lineWidth = 25; wave.lineCapStyle = .round; wave.stroke()
-        }
-        NSBezierPath(ovalIn: NSRect(x: 492, y: 504, width: 40, height: 40)).fill()
+        base.move(to: NSPoint(x: 232, y: 316))
+        base.line(to: NSPoint(x: 792, y: 316))
+        base.lineWidth = 50
+        base.lineCapStyle = .round
+        base.stroke()
+
+        // 중앙 초록 상태점 (#237A4B)
+        let activeGreen = NSColor(srgbRed: 0.137, green: 0.478, blue: 0.294, alpha: 1)
+        activeGreen.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 512 - 63, y: 546 - 63, width: 126, height: 126)).fill()
+
         NSGraphicsContext.restoreGraphicsState()
         let suffix = scale == 2 ? "@2x" : ""
         let url = URL(fileURLWithPath: folder).appendingPathComponent("icon_\(size)x\(size)\(suffix).png")

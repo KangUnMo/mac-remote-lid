@@ -1066,7 +1066,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !checkingUpdate else { return }
         checkingUpdate = true
         lastUpdateCheck = Date()
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.5"
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.6"
 
         guard let url = URL(string: "https://api.github.com/repos/KangUnMo/mac-remote-lid/releases") else {
             checkingUpdate = false
@@ -1352,8 +1352,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func help() {
         let alert = NSAlert()
-        alert.messageText = "원격지킴이 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.3") · 개인용"
-        alert.informativeText = "토글로 원격 모드를 켜거나 끄세요. 전원 이벤트와 실제 설정을 확인합니다.\n\n끄면 앱이 변경한 전원 항목을 이전 값으로 복원합니다. MacBook에서 충전기가 없거나 배터리가 20% 이하이면 켜기 전에 확인합니다. Mac mini·Mac Studio 등은 배터리 경고 없이 사용합니다. 실행 중 위험 상태가 바뀌면 다시 알립니다. 자동으로 끄지는 않습니다.\n\n이 앱은 Codex 원격 연결 자체를 설정하거나 연결 여부를 검사하지 않습니다. 다른 잠자기 제어 앱과 함께 사용하지 마세요.\n\n강제 종료·전원 중단 후에도 설정은 남을 수 있습니다. 앱을 다시 열어 이전 설정을 복원해 주세요. 복원 파일이 손상되면 잠자기 방지만 긴급 해제할 수 있습니다.\n\n수동 긴급 해제: sudo pmset -a disablesleep 0\n개인용 로컬 서명 앱 · Apple 공증 없음."
+        alert.messageText = "원격지킴이 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.6") · 개인용"
+        alert.informativeText = """
+• 원격 모드 켜기: Mac 본체 잠자기를 막고 켜기 전 전원 설정을 백업합니다.
+• 원격 모드 끄기: 앱이 바꾼 전원 설정을 이전 값으로 자동 복원합니다.
+• 배터리 보호: MacBook 미충전·20% 이하 시 켜기 전과 사용 중 경고합니다.
+
+[주의 사항]
+• 이동하거나 가방에 넣기 전에는 반드시 원격 모드를 꺼 주세요.
+• 다른 잠자기 방지 앱과 함께 쓰지 마세요.
+• 강제 종료 시 앱을 다시 열어 '이전 설정 복원'을 눌러 주세요.
+
+수동 긴급 해제: sudo pmset -a disablesleep 0
+개인용 로컬 서명 빌드 (Apple 공증 없음)
+"""
         alert.addButton(withTitle: "확인")
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
