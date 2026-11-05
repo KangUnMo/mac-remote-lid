@@ -27,16 +27,7 @@ func getLocalIPAddresses() -> [IPInfo] {
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             if getnameinfo(addrPtr, socklen_t(addrPtr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
                 let ip = String(cString: host)
-                let label: String
-                if name == "en0" {
-                    label = "Wi-Fi (en0)"
-                } else if name.hasPrefix("en") {
-                    label = "이더넷 (\(name))"
-                } else if name.hasPrefix("utun") {
-                    label = "Tailscale / VPN (\(name))"
-                } else {
-                    label = "네트워크 (\(name))"
-                }
+                let label = "네트워크 (\(name))"
                 addresses.append(IPInfo(name: name, label: label, ip: ip))
             }
         }
@@ -59,6 +50,26 @@ struct GitHubAsset: Decodable {
 struct AppUpdateInfo {
     let version: String
     let downloadURL: URL
+}
+
+func installableUpdateVersion(_ update: AppUpdateInfo) -> String? {
+    let version = update.version.hasPrefix("v") ? String(update.version.dropFirst()) : update.version
+    guard version.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+$"#, options: .regularExpression) != nil,
+          version.split(separator: ".").allSatisfy({ Int($0) != nil }),
+          update.downloadURL.absoluteString == "https://github.com/KangUnMo/mac-remote-lid/releases/download/\(update.version)/remote-lid-\(version)-arm64.zip" else { return nil }
+    return version
+}
+
+func latestInstallableUpdate(_ releases: [GitHubRelease]) -> AppUpdateInfo? {
+    releases.filter { !$0.draft && !$0.prerelease }.compactMap { release in
+        release.assets.compactMap { asset -> AppUpdateInfo? in
+            guard let url = URL(string: asset.browser_download_url) else { return nil }
+            let update = AppUpdateInfo(version: release.tag_name, downloadURL: url)
+            guard let version = installableUpdateVersion(update),
+                  asset.name == "remote-lid-\(version)-arm64.zip" else { return nil }
+            return update
+        }.first
+    }.max { isVersion($1.version, newerThan: $0.version) }
 }
 
 // 인수로 경로를 전달하여 공백과 셸 특수 문자가 있는 설치 경로도 보존합니다.
@@ -164,6 +175,11 @@ struct DisplaySleepRequest: Equatable {
 struct DisplaySleepReport {
     var requests: [DisplaySleepRequest] = []
     var error: String?
+    var queriedAt = Date()
+
+    var queryTimeText: String {
+        "마지막 조회: " + DateFormatter.localizedString(from: queriedAt, dateStyle: .short, timeStyle: .medium)
+    }
 
     var appNames: [String] {
         var seen = Set<String>()
@@ -177,17 +193,21 @@ struct DisplaySleepReport {
     var summary: String {
         if error != nil { return "화면 꺼짐 방해 앱 조회 실패" }
         let apps = appNames
-        guard let first = apps.first else { return "화면 자동 꺼짐 정상 (본체만 깨움)" }
-        return apps.count == 1 ? "⚠️ 화면 안 꺼짐 원인: \(first)" : "⚠️ 화면 안 꺼짐 원인: \(first) 외 \(apps.count - 1)개"
+        guard let first = apps.first else { return "화면 자동 꺼짐 방지 요청 없음" }
+        return apps.count == 1 ? "⚠️ 화면 자동 꺼짐 방지 요청: \(first)" : "⚠️ 화면 자동 꺼짐 방지 요청: \(first) 외 \(apps.count - 1)개"
     }
 
     var details: String {
-        if let error { return "\(error)\n잠시 후 새로고침해 주세요. 원격 모드 제어는 계속 사용할 수 있습니다." }
-        if requests.isEmpty {
-            return "현재 화면 꺼짐을 막고 있는 외부 앱이 없습니다.\n원격지킴이는 Mac 본체 잠자기만 방지하며 화면은 켜두지 않습니다."
+        let content: String
+        if let error {
+            content = "\(error)\n잠시 후 새로고침해 주세요. 원격 모드 제어는 계속 사용할 수 있습니다."
+        } else if requests.isEmpty {
+            content = "조회 시점에 감지된 화면 자동 꺼짐 방지 요청이 없습니다.\n사용자 입력이나 다른 전원 조건까지 검사한 결과는 아닙니다."
+        } else {
+            content = "조회 시점에 감지된 화면 자동 꺼짐 방지 요청입니다. 실제 화면 상태나 원인을 확정하지 않습니다.\n요청 사유는 앱이 제공한 문구이며 실제 캡처 대상을 확인한 결과는 아닙니다.\n\n" +
+                requests.map(\.description).joined(separator: "\n\n")
         }
-        return "원격지킴이는 화면을 켜두지 않습니다. 현재 아래 외부 앱이 화면 꺼짐을 막고 있습니다:\n\n" +
-            requests.map(\.description).joined(separator: "\n\n")
+        return "\(queryTimeText)\n\n\(content)"
     }
 }
 
@@ -581,7 +601,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let ipLabel = NSTextField(wrappingLabelWithString: "")
     let sshCopyButton = NSButton(title: "SSH 접속 명령어 복사", target: nil, action: nil)
     let infoTabControl = NSSegmentedControl(labels: ["화면 꺼짐 방해", "현재 설정", "이전 설정"], trackingMode: .selectOne, target: nil, action: nil)
-    let displaySleepLabel = NSTextField(wrappingLabelWithString: "화면 꺼짐 방해 요청 확인 중")
+    let displaySleepLabel = NSTextField(wrappingLabelWithString: "화면 자동 꺼짐 방지 요청 미조회")
     let displaySleepDetails = NSTextView()
     let displayScroll = NSScrollView()
     let displayNote = NSTextField(wrappingLabelWithString: "60초마다 갱신합니다. 시스템 잠자기 방지는 별개입니다.\n영상 재생·캡처를 마친 뒤 해당 앱에서 종료해 주세요.")
@@ -887,8 +907,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         restoreButton.isEnabled = !working && saved != nil && live != nil
         launchCheckbox.state = isLaunchAtLoginEnabled ? .on : .off
         launchCheckbox.isEnabled = !working
-        let displaySummary = displaySleepReport?.summary ?? "화면 꺼짐 방해 요청 확인 중"
-        let displayDetails = displaySleepReport?.details ?? "macOS 전원 요청을 조회하고 있습니다."
+        let displaySummary = displaySleepReport?.summary ?? "화면 자동 꺼짐 방지 요청 미조회"
+        let displayDetails = displaySleepReport?.details ?? "아직 조회 결과가 없습니다. macOS 전원 요청을 조회하고 있습니다."
         let selectedTab = infoTabControl.selectedSegment
         let activeTabTitle: String
         let activeTabContent: String
@@ -906,7 +926,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             activeTabTitle = displaySummary
             activeTabContent = displayDetails
-            activeTabNote = "60초마다 갱신합니다. 원격지킴이는 본체 잠자기만 막고 화면은 켜두지 않습니다.\n화면이 안 꺼진다면 위 외부 앱에서 영상 재생·캡처를 종료해 주세요."
+            activeTabNote = "60초마다 갱신합니다. 화면 자동 꺼짐 방지 요청과 실제 화면 상태는 다를 수 있습니다.\n원격 모드를 켜면 본체 잠자기를 방지합니다. 이 목록은 화면 유지 요청의 조회 결과입니다."
             displaySleepLabel.textColor = (displaySleepReport?.error != nil || !(displaySleepReport?.requests.isEmpty ?? true)) ? .systemOrange : .labelColor
         }
         displaySleepLabel.stringValue = activeTabTitle
@@ -1066,7 +1086,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !checkingUpdate else { return }
         checkingUpdate = true
         lastUpdateCheck = Date()
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.6"
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.7"
 
         guard let url = URL(string: "https://api.github.com/repos/KangUnMo/mac-remote-lid/releases") else {
             checkingUpdate = false
@@ -1083,9 +1103,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
                 guard let data = data,
                       let releases = try? JSONDecoder().decode([GitHubRelease].self, from: data),
-                      let latest = releases.first(where: { !$0.draft }),
-                      let asset = latest.assets.first(where: { $0.name.contains("arm64") && $0.name.hasSuffix(".zip") }),
-                      let downloadURL = URL(string: asset.browser_download_url)
+                      let info = latestInstallableUpdate(releases)
                 else {
                     if manual {
                         self.showInfo("업데이트 확인 실패", "최신 버전 정보를 가져오지 못했습니다. 네트워크 상태를 확인해 주세요.")
@@ -1093,9 +1111,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return
                 }
 
-                let latestVersion = latest.tag_name
+                let latestVersion = info.version
                 if isVersion(latestVersion, newerThan: currentVersion) {
-                    let info = AppUpdateInfo(version: latestVersion, downloadURL: downloadURL)
                     self.availableUpdate = info
                     self.render()
                     if manual {
@@ -1162,10 +1179,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let work = parent.appendingPathComponent(".RemoteLidUpdate-\(UUID().uuidString)", isDirectory: true)
             let package = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("RemoteLidUpdate-\(UUID().uuidString)")
             do {
-                let version = update.version.hasPrefix("v") ? String(update.version.dropFirst()) : update.version
-                let expectedURL = "https://github.com/KangUnMo/mac-remote-lid/releases/download/\(update.version)/remote-lid-\(version)-arm64.zip"
-                guard version.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil,
-                      update.downloadURL.absoluteString == expectedURL,
+                guard let version = installableUpdateVersion(update),
                       files.isWritableFile(atPath: parent.path) else {
                     throw AppError(message: "업데이트 주소 또는 설치 폴더 권한을 확인하지 못했습니다. 수동 설치를 이용해 주세요.")
                 }
@@ -1352,7 +1366,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func help() {
         let alert = NSAlert()
-        alert.messageText = "원격지킴이 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.6") · 개인용"
+        alert.messageText = "원격지킴이 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.7") · 개인용"
         alert.informativeText = """
 • 원격 모드 켜기: Mac 본체 잠자기를 막고 켜기 전 전원 설정을 백업합니다.
 • 원격 모드 끄기: 앱이 바꾼 전원 설정을 이전 값으로 자동 복원합니다.
@@ -1435,14 +1449,20 @@ func selfTest() throws {
     precondition(requests[1].app == "Process 200" && requests[1].reason == "Video Wake Lock" && requests[1].count == 1)
     precondition(requests[2].app == "Process 250" && requests[2].reason == "앱에서 사유를 제공하지 않았습니다.")
     let report = DisplaySleepReport(requests: requests)
-    precondition(report.summary == "⚠️ 화면 안 꺼짐 원인: Process 200 외 1개")
-    precondition(report.details.contains("PID 200") && report.details.contains("원격지킴이는 화면을 켜두지 않습니다."))
+    precondition(report.summary == "⚠️ 화면 자동 꺼짐 방지 요청: Process 200 외 1개")
+    precondition(report.details.contains("PID 200") && report.details.contains("실제 화면 상태나 원인을 확정하지 않습니다."))
+    precondition(report.details.contains("실제 캡처 대상을 확인한 결과는 아닙니다."))
+    let queryDate = Date(timeIntervalSince1970: 1_700_000_000)
+    let timed = DisplaySleepReport(queriedAt: queryDate)
+    precondition(timed.queriedAt == queryDate && timed.details.contains(timed.queryTimeText))
+    precondition(!timed.details.contains("본체 잠자기만 방지"))
     let singleReport = DisplaySleepReport(requests: [requests[0]])
-    precondition(singleReport.summary == "⚠️ 화면 안 꺼짐 원인: Process 200")
-    precondition(DisplaySleepReport().summary == "화면 자동 꺼짐 정상 (본체만 깨움)")
+    precondition(singleReport.summary == "⚠️ 화면 자동 꺼짐 방지 요청: Process 200")
+    precondition(DisplaySleepReport().summary == "화면 자동 꺼짐 방지 요청 없음")
     let failed = DisplaySleepReport(error: "TEST_ERROR")
     precondition(failed.summary.contains("조회 실패") && failed.details.contains("TEST_ERROR"))
     precondition(!failed.summary.contains("정상"))
+    precondition(failed.details.contains(failed.queryTimeText))
     let empty = try displaySleepRequests([:])
     precondition(empty.isEmpty)
     for invalid: [NSNumber: [[String: Any]]] in [
@@ -1622,6 +1642,29 @@ func selfTest() throws {
     precondition(isVersion("v1.2.0", newerThan: "v1.1.9"))
     precondition(!isVersion("1.1.1", newerThan: "1.1.1"))
     precondition(!isVersion("1.1.0", newerThan: "1.1.1"))
+    func release(_ tag: String = "v1.1.7", draft: Bool = false, prerelease: Bool = false,
+        name: String = "remote-lid-1.1.7-arm64.zip", address: String? = nil) -> GitHubRelease {
+        GitHubRelease(tag_name: tag, draft: draft, prerelease: prerelease,
+            assets: [GitHubAsset(name: name, browser_download_url: address ??
+                "https://github.com/KangUnMo/mac-remote-lid/releases/download/\(tag)/\(name)")])
+    }
+    let validRelease = release()
+    let selectedRelease = latestInstallableUpdate([release("v1.1.6", name: "remote-lid-1.1.6-arm64.zip"), validRelease])
+    precondition(selectedRelease?.version == "v1.1.7")
+    precondition(isVersion(selectedRelease!.version, newerThan: "1.1.6"))
+    let invalidReleases = [release(draft: true), release(prerelease: true), release("v1.1.8-beta"),
+        release("v1.1.bad"), release("V1.1.7"), release("v1.1.7\n"), release(name: "other-arm64.zip"),
+        release(address: "https://example.com/remote-lid-1.1.7-arm64.zip"),
+        release(address: "https://github.com/KangUnMo/mac-remote-lid/releases/download/v1.1.7/remote-lid-1.1.7-arm64.zip?other")]
+    for invalid in invalidReleases {
+        precondition(latestInstallableUpdate([invalid]) == nil)
+        precondition(latestInstallableUpdate([invalid, validRelease])?.version == "v1.1.7")
+    }
+    precondition(latestInstallableUpdate([]) == nil)
+    precondition(latestInstallableUpdate([validRelease, release("v1.1.8", name: "remote-lid-1.1.8-arm64.zip")])?.version == "v1.1.8")
+    let wrongFirstAsset = GitHubRelease(tag_name: "v1.1.7", draft: false, prerelease: false,
+        assets: release(name: "wrong-arm64.zip").assets + validRelease.assets)
+    precondition(latestInstallableUpdate([wrongFirstAsset])?.version == "v1.1.7")
     precondition(updateNeedsRestore(saved: true, disabled: 0, assertion: 0))
     precondition(updateNeedsRestore(saved: false, disabled: 1, assertion: 0))
     precondition(updateNeedsRestore(saved: false, disabled: nil, assertion: 0))
@@ -1698,6 +1741,9 @@ func selfTest() throws {
     app.makeWindow()
     app.availableUpdate = AppUpdateInfo(version: "test", downloadURL: URL(string: "https://example.com/test.zip")!)
     app.lastError = Array(repeating: "긴 상태 안내입니다.", count: 12).joined(separator: " ")
+    app.render()
+    precondition(app.displaySleepLabel.stringValue.contains("미조회"))
+    precondition(app.displaySleepDetails.string.contains("아직 조회 결과가 없습니다."))
     app.displaySleepReport = report
     app.render()
     app.window!.contentView!.layoutSubtreeIfNeeded()
@@ -1707,12 +1753,16 @@ func selfTest() throws {
     let displayMenuItem = app.menu.items.first { $0.title == report.summary }
     precondition(displayMenuItem != nil && displayMenuItem?.submenu == nil)
     precondition(displayMenuItem?.action == #selector(AppDelegate.openDisplaySleepTab))
+    app.live = SystemState(settings: original, power: live.power, powerError: live.powerError, lid: live.lid)
     for state in [DisplaySleepReport(), failed] {
         app.displaySleepReport = state
         app.infoTabControl.selectedSegment = 0
         app.render()
         precondition(app.displaySleepLabel.stringValue == state.summary)
         precondition(app.displaySleepDetails.string == state.details)
+        precondition(app.stateLabel.stringValue == "원격 모드 꺼짐")
+        precondition(!app.displaySleepDetails.string.contains("본체만 깨움"))
+        precondition(!app.displayNote.stringValue.contains("본체 잠자기만 막고"))
         let menuItem = app.menu.items.first { $0.title == state.summary }
         precondition(menuItem != nil && menuItem?.submenu == nil)
     }
@@ -1727,7 +1777,7 @@ func selfTest() throws {
     precondition(app.displaySleepDetails.string.contains("복원 대상"))
     app.window?.close()
     NSStatusBar.system.removeStatusItem(app.status)
-    print("PASS: update restore sequencing, checksum validation, helper success/rollback/exit timeout, bundle rejection, display sleep request filtering, inactive/system exclusion, multiple requests, missing reasons, invalid data, error/empty distinction, live assertion query, window/menu rendering, status dot colors in light/dark appearance, click passthrough, SSH settings URL, parsing, desktop power, battery warnings, restore ownership, validation, guarded transactions, rollback, timeout, auth compilation, live read, version comparison")
+    print("PASS: release candidate filtering, display query timestamps/unqueried/off state, update restore sequencing, checksum validation, helper success/rollback/exit timeout, bundle rejection, display sleep request filtering, inactive/system exclusion, multiple requests, missing reasons, invalid data, error/empty distinction, live assertion query, window/menu rendering, status dot colors in light/dark appearance, click passthrough, SSH settings URL, parsing, desktop power, battery warnings, restore ownership, validation, guarded transactions, rollback, timeout, auth compilation, live read, version comparison")
 }
 
 if CommandLine.arguments.contains("--self-test") {

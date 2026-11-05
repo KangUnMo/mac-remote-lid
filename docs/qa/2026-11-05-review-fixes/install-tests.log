@@ -1,0 +1,22 @@
+PASS: running
+PASS: late-running
+PASS: download-failure
+PASS: checksum
+PASS: malformed-checksum
+PASS: identifier
+PASS: version
+PASS: executable-name
+PASS: missing-executable
+PASS: signature
+PASS: staged-signature
+PASS: new
+PASS: replace
+PASS: sudo-replace
+PASS: stage-failure
+PASS: backup-failure
+PASS: replace-failure
+PASS: recovery-failure
+PASS: launch-failure
+PASS: new-launch-failure
+PASS: xattr-failure
+PASS: 21 isolated installation scenarios; no real installation, authentication, app termination or xattr changes

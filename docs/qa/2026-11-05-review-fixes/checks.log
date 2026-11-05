@@ -1,0 +1,24 @@
+$ /bin/bash --version
+exit=0
+GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)
+Copyright (C) 2007 Free Software Foundation, Inc.
+
+$ /bin/bash -n install.sh
+exit=0
+
+$ /bin/sh -n install.sh
+exit=0
+
+$ /bin/sh -n Source/build.sh
+exit=0
+
+$ plutil -lint Source/Info.plist
+exit=0
+Source/Info.plist: OK
+
+$ git diff --check
+exit=0
+
+$ (cd website/downloads && shasum -a 256 -c remote-lid-1.1.6-arm64.zip.sha256)
+exit=0
+remote-lid-1.1.6-arm64.zip: OK

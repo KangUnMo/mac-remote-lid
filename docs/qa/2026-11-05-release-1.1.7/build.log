@@ -1,0 +1,4 @@
+/var/folders/4d/b36hwhbx7nx51gvzx_bdlhnw0000gn/T//remotelid-build.jytgwL/원격지킴이.app: replacing existing signature
+PASS: release candidate filtering, display query timestamps/unqueried/off state, update restore sequencing, checksum validation, helper success/rollback/exit timeout, bundle rejection, display sleep request filtering, inactive/system exclusion, multiple requests, missing reasons, invalid data, error/empty distinction, live assertion query, window/menu rendering, status dot colors in light/dark appearance, click passthrough, SSH settings URL, parsing, desktop power, battery warnings, restore ownership, validation, guarded transactions, rollback, timeout, auth compilation, live read, version comparison
+앱: build/원격지킴이.app
+다운로드: website/downloads/remote-lid-1.1.7-arm64.zip

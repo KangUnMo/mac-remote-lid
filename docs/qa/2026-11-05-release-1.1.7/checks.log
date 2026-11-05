@@ -1,0 +1,27 @@
+$ /bin/bash -n install.sh
+exit=0
+
+$ /bin/sh -n install.sh
+exit=0
+
+$ /bin/sh -n Source/build.sh
+exit=0
+
+$ plutil -lint Source/Info.plist
+exit=0
+Source/Info.plist: OK
+
+$ git diff --check
+exit=0
+
+PASS: source plist version 1.1.7 / build 9
+PASS: website changes limited to 1.1.6 -> 1.1.7 version/link strings
+PASS: current docs use 1.1.7; 1.1.2/1.1.3 histories retained
+$ (cd website/downloads && shasum -a 256 -c remote-lid-1.1.7-arm64.zip.sha256)
+exit=0
+remote-lid-1.1.7-arm64.zip: OK
+
+PASS: ZIP inspection with Python zipfile metadata_encoding=utf-8
+PASS: archived bundle identifier personal.remotelid / version 1.1.7 / build 9 / executable present
+SHA-256: a30df925e8e2c366917d3f6dd9ca2a05ea3af767a51a6779b9b6644521f0a45e
+ZIP bytes: 521543
