@@ -91,7 +91,7 @@ def main():
                 (binary_dir / command).symlink_to(mock)
             fixture = root / 'fixture.app'
             (fixture / 'Contents/MacOS').mkdir(parents=True)
-            info = {'CFBundleIdentifier': 'personal.remotelid', 'CFBundleShortVersionString': '1.1.7',
+            info = {'CFBundleIdentifier': 'personal.remotelid', 'CFBundleShortVersionString': '1.1.8',
                     'CFBundleExecutable': 'RemoteLid'}
             if scenario == 'identifier': info['CFBundleIdentifier'] = 'wrong.app'
             if scenario == 'version': info['CFBundleShortVersionString'] = '1.1.6'

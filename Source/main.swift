@@ -198,16 +198,13 @@ struct DisplaySleepReport {
     }
 
     var details: String {
-        let content: String
         if let error {
-            content = "\(error)\n잠시 후 새로고침해 주세요. 원격 모드 제어는 계속 사용할 수 있습니다."
+            return "\(error)\n잠시 후 새로고침해 주세요.\n원격 모드 제어는 계속 사용할 수 있습니다."
         } else if requests.isEmpty {
-            content = "조회 시점에 감지된 화면 자동 꺼짐 방지 요청이 없습니다.\n사용자 입력이나 다른 전원 조건까지 검사한 결과는 아닙니다."
+            return "화면 자동 꺼짐을 막는 요청이 감지되지 않았습니다.\n사용자 입력이나 다른 전원 조건은 별도로 확인해 주세요."
         } else {
-            content = "조회 시점에 감지된 화면 자동 꺼짐 방지 요청입니다. 실제 화면 상태나 원인을 확정하지 않습니다.\n요청 사유는 앱이 제공한 문구이며 실제 캡처 대상을 확인한 결과는 아닙니다.\n\n" +
-                requests.map(\.description).joined(separator: "\n\n")
+            return requests.map(\.description).joined(separator: "\n\n")
         }
-        return "\(queryTimeText)\n\n\(content)"
     }
 }
 
@@ -604,7 +601,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let displaySleepLabel = NSTextField(wrappingLabelWithString: "화면 자동 꺼짐 방지 요청 미조회")
     let displaySleepDetails = NSTextView()
     let displayScroll = NSScrollView()
-    let displayNote = NSTextField(wrappingLabelWithString: "60초마다 갱신합니다. 시스템 잠자기 방지는 별개입니다.\n영상 재생·캡처를 마친 뒤 해당 앱에서 종료해 주세요.")
+    let displayNote = NSTextField(wrappingLabelWithString: "")
     let displayRefreshButton = NSButton(title: "지금 상태 새로고침", target: nil, action: nil)
     var displaySleepReport: DisplaySleepReport?
     let updateBannerButton = NSButton(title: "새 버전 업데이트 가능", target: nil, action: nil)
@@ -700,6 +697,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         infoTabControl.action = #selector(tabChanged)
         infoTabControl.segmentStyle = .rounded
         displaySleepLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        displaySleepLabel.lineBreakStrategy = .hangulWordPriority
         displayRefreshButton.target = self
         displayRefreshButton.action = #selector(refreshAction)
         displayRefreshButton.bezelStyle = .rounded
@@ -708,7 +706,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         displaySleepDetails.isEditable = false
         displaySleepDetails.isSelectable = true
         displaySleepDetails.drawsBackground = false
-        displaySleepDetails.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        displaySleepDetails.font = .systemFont(ofSize: 12)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.lineBreakStrategy = .hangulWordPriority
+        paragraph.lineSpacing = 2
+        displaySleepDetails.defaultParagraphStyle = paragraph
         displaySleepDetails.textColor = .labelColor
         displaySleepDetails.isHorizontallyResizable = false
         displaySleepDetails.isVerticallyResizable = true
@@ -727,6 +730,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         displayScroll.layer?.borderColor = NSColor.separatorColor.cgColor
         displayScroll.documentView = displaySleepDetails
         displayNote.font = .systemFont(ofSize: 11)
+        displayNote.lineBreakStrategy = .hangulWordPriority
         displayNote.textColor = .secondaryLabelColor
         let displaySection = NSStackView(views: [tabRow, displaySleepLabel, displayScroll, displayNote])
         displaySection.orientation = .vertical
@@ -926,12 +930,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             activeTabTitle = displaySummary
             activeTabContent = displayDetails
-            activeTabNote = "60초마다 갱신합니다. 화면 자동 꺼짐 방지 요청과 실제 화면 상태는 다를 수 있습니다.\n원격 모드를 켜면 본체 잠자기를 방지합니다. 이 목록은 화면 유지 요청의 조회 결과입니다."
+            activeTabNote = "화면 꺼짐을 막는 앱의 전원 요청을 60초마다 확인합니다.\n요청 사유는 앱이 제공하며, 실제 화면 상태나 캡처 대상은 확인하지 않습니다."
             displaySleepLabel.textColor = (displaySleepReport?.error != nil || !(displaySleepReport?.requests.isEmpty ?? true)) ? .systemOrange : .labelColor
         }
         displaySleepLabel.stringValue = activeTabTitle
-        if displaySleepDetails.string != activeTabContent { displaySleepDetails.string = activeTabContent }
+        if displaySleepDetails.string != activeTabContent {
+            displaySleepDetails.string = activeTabContent
+            displaySleepDetails.setSelectedRange(NSRange(location: 0, length: 0))
+            displaySleepDetails.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        }
         displayNote.stringValue = activeTabNote
+        displayRefreshButton.toolTip = displaySleepReport.map { "화면 꺼짐 방지 요청 \($0.queryTimeText)" }
+            ?? "아직 화면 꺼짐 방지 요청을 조회하지 않았습니다."
         displayScroll.layer?.borderColor = NSColor.separatorColor.cgColor
         displayRefreshButton.isEnabled = !working
 
@@ -1450,11 +1460,11 @@ func selfTest() throws {
     precondition(requests[2].app == "Process 250" && requests[2].reason == "앱에서 사유를 제공하지 않았습니다.")
     let report = DisplaySleepReport(requests: requests)
     precondition(report.summary == "⚠️ 화면 자동 꺼짐 방지 요청: Process 200 외 1개")
-    precondition(report.details.contains("PID 200") && report.details.contains("실제 화면 상태나 원인을 확정하지 않습니다."))
-    precondition(report.details.contains("실제 캡처 대상을 확인한 결과는 아닙니다."))
+    precondition(report.details.hasPrefix(requests[0].description))
+    precondition(report.details == requests.map(\.description).joined(separator: "\n\n"))
     let queryDate = Date(timeIntervalSince1970: 1_700_000_000)
     let timed = DisplaySleepReport(queriedAt: queryDate)
-    precondition(timed.queriedAt == queryDate && timed.details.contains(timed.queryTimeText))
+    precondition(timed.queriedAt == queryDate && !timed.details.contains(timed.queryTimeText))
     precondition(!timed.details.contains("본체 잠자기만 방지"))
     let singleReport = DisplaySleepReport(requests: [requests[0]])
     precondition(singleReport.summary == "⚠️ 화면 자동 꺼짐 방지 요청: Process 200")
@@ -1462,7 +1472,7 @@ func selfTest() throws {
     let failed = DisplaySleepReport(error: "TEST_ERROR")
     precondition(failed.summary.contains("조회 실패") && failed.details.contains("TEST_ERROR"))
     precondition(!failed.summary.contains("정상"))
-    precondition(failed.details.contains(failed.queryTimeText))
+    precondition(!failed.details.contains(failed.queryTimeText))
     let empty = try displaySleepRequests([:])
     precondition(empty.isEmpty)
     for invalid: [NSNumber: [[String: Any]]] in [
@@ -1744,12 +1754,18 @@ func selfTest() throws {
     app.render()
     precondition(app.displaySleepLabel.stringValue.contains("미조회"))
     precondition(app.displaySleepDetails.string.contains("아직 조회 결과가 없습니다."))
+    precondition(app.displayRefreshButton.toolTip!.contains("아직"))
     app.displaySleepReport = report
     app.render()
     app.window!.contentView!.layoutSubtreeIfNeeded()
     precondition(app.displaySleepDetails.frame.width > 400)
     precondition(app.displaySleepDetails.string == report.details)
     precondition(app.displaySleepLabel.stringValue == report.summary)
+    precondition(app.displayRefreshButton.toolTip!.contains(report.queryTimeText))
+    precondition(app.displayNote.stringValue.contains("60초마다 확인합니다."))
+    precondition(app.displayNote.stringValue.contains("캡처 대상은 확인하지 않습니다."))
+    let paragraph = app.displaySleepDetails.textStorage!.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as! NSParagraphStyle
+    precondition(paragraph.lineBreakStrategy.contains(.hangulWordPriority))
     let displayMenuItem = app.menu.items.first { $0.title == report.summary }
     precondition(displayMenuItem != nil && displayMenuItem?.submenu == nil)
     precondition(displayMenuItem?.action == #selector(AppDelegate.openDisplaySleepTab))
@@ -1760,6 +1776,7 @@ func selfTest() throws {
         app.render()
         precondition(app.displaySleepLabel.stringValue == state.summary)
         precondition(app.displaySleepDetails.string == state.details)
+        precondition(app.displayRefreshButton.toolTip!.contains(state.queryTimeText))
         precondition(app.stateLabel.stringValue == "원격 모드 꺼짐")
         precondition(!app.displaySleepDetails.string.contains("본체만 깨움"))
         precondition(!app.displayNote.stringValue.contains("본체 잠자기만 막고"))
@@ -1793,6 +1810,7 @@ if CommandLine.arguments.contains("--self-test") {
         print(try run("/usr/bin/pmset", ["-g", "batt"]))
         let displayReport = readDisplaySleepReport()
         print(displayReport.summary)
+        print(displayReport.queryTimeText)
         print(displayReport.details)
     } catch { fputs("\(error)\n", stderr); exit(1) }
 } else {
